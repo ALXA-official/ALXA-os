@@ -3,7 +3,14 @@
 Made by **alxa**.
 
 An extremely minimal operating system: the Linux kernel plus a single custom
-`init` program. No desktop environment, no shell, no applications.
+`init` program that includes its own small shell. No desktop environment, no
+third-party shell, no applications.
+
+## The ALXA shell
+
+After boot you get an `alxa>` prompt. Type `help` to list commands (ls, cat,
+mkdir, cd, mem, uptime, reboot and more). The shell is original code written for
+this project, not copied from BusyBox or any other shell.
 
 ## Build
 
