@@ -8,9 +8,38 @@ third-party shell, no applications.
 
 ## The ALXA shell
 
-After boot you get an `alxa>` prompt. Type `help` to list commands (ls, cat,
-mkdir, cd, mem, uptime, reboot and more). The shell is original code written for
-this project, not copied from BusyBox or any other shell.
+After boot you get an `alxa>` prompt. Type `help` to list commands.
+
+| Command | What it does |
+|---|---|
+| `ls`, `dir` | list a folder (`dir` shows sizes) |
+| `cat FILE` | print a file |
+| `edit FILE` | full-screen colored text editor (Ctrl+O save, Ctrl+X exit) |
+| `mkdir`, `rmdir` | make / remove a folder |
+| `rm`, `del` | delete a file |
+| `cp SRC DST` | copy a file |
+| `cd`, `pwd` | change / show the current folder |
+| `mem`, `uptime`, `ver`, `clear`, `echo` | system info and basics |
+| `commands` | list every available command |
+| `which NAME` | show where a command comes from |
+| `install FILE [NAME]` | add a program to `/bin` so it becomes a command |
+| `reboot`, `poweroff` | restart / shut down |
+
+The shell and editor are original code written for this project, not copied from
+BusyBox or any other shell.
+
+### Adding commands (apps)
+
+Any executable file in `/bin`, `/usr/bin`, `/usr/local/bin` or `/sbin` runs by
+its name, like on Linux. Two ways to add one:
+
+- **At build time:** put the program in `overlay/bin/` in this repo. Everything in
+  `overlay/` is copied into the OS image.
+- **While running:** `install ./myapp` copies it into `/bin`.
+
+Programs must be **statically linked** (for example `gcc -static`), because ALXA
+OS contains no shared libraries. Note: the filesystem lives in RAM, so files
+created or installed while running disappear on reboot.
 
 ## Build
 

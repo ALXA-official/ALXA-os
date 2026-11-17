@@ -36,9 +36,15 @@ cp arch/x86/boot/bzImage ../../bzImage
 cd ..
 
 # 2) initramfs: only our init, statically linked
-gcc -static -O2 -o ../init ../init.c
+gcc -static -O2 -o ../init ../init.c ../editor.c
 rm -rf rootfs && mkdir rootfs
 cp ../init rootfs/init
+# Anything in overlay/ is copied into the OS. Put programs in overlay/bin/ and
+# they become commands (they must be statically linked: ALXA OS has no libraries).
+if [ -d ../overlay ]; then
+  cp -a ../overlay/. rootfs/
+  rm -f rootfs/bin/.gitkeep
+fi
 (cd rootfs && find . | cpio -o -H newc | gzip > ../../initramfs.gz)
 
 echo "Done: bzImage + initramfs.gz. Run ./run-qemu.sh"
