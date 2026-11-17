@@ -1,0 +1,42 @@
+name: Build ALXA OS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison bc libelf-dev \
+            libssl-dev cpio curl xz-utils qemu-system-x86
+
+      - name: Build kernel + initramfs
+        run: |
+          chmod +x build.sh run-qemu.sh
+          ./build.sh
+
+      - name: Boot test in QEMU
+        run: |
+          timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
+            -append "console=ttyS0" -nographic -m 64M > boot.log 2>&1 || true
+          cat boot.log
+          grep -q "ALXA OS" boot.log
+
+      - name: Upload build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: alxa-os
+          path: |
+            bzImage
+            initramfs.gz
+            kernel.config
+            boot.log
