@@ -28,7 +28,8 @@ make tinyconfig
   --enable RD_GZIP \
   --enable BINFMT_ELF \
   --enable DEVTMPFS \
-  --enable DEVTMPFS_MOUNT
+  --enable DEVTMPFS_MOUNT \
+  --enable PROC_FS
 make olddefconfig
 cp .config ../../kernel.config
 make -j"$JOBS" bzImage
@@ -36,7 +37,7 @@ cp arch/x86/boot/bzImage ../../bzImage
 cd ..
 
 # 2) initramfs: only our init, statically linked
-gcc -static -O2 -o ../init ../init.c ../editor.c
+gcc -static -O2 -o ../init ../init.c ../cmds.c ../editor.c
 rm -rf rootfs && mkdir rootfs
 cp ../init rootfs/init
 # Anything in overlay/ is copied into the OS. Put programs in overlay/bin/ and

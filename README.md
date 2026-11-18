@@ -8,25 +8,29 @@ third-party shell, no applications.
 
 ## The ALXA shell
 
-After boot you get an `alxa>` prompt. Type `help` to list commands.
+After boot you get an `alxa:/>` prompt. Type `help` to list commands.
 
-| Command | What it does |
+**Commands (about 70):**
+
+| Group | Commands |
 |---|---|
-| `ls`, `dir` | list a folder (`dir` shows sizes) |
-| `cat FILE` | print a file |
-| `edit FILE` | full-screen colored text editor (Ctrl+O save, Ctrl+X exit) |
-| `mkdir`, `rmdir` | make / remove a folder |
-| `rm`, `del` | delete a file |
-| `cp SRC DST` | copy a file |
-| `cd`, `pwd` | change / show the current folder |
-| `mem`, `uptime`, `ver`, `clear`, `echo` | system info and basics |
-| `commands` | list every available command |
-| `which NAME` | show where a command comes from |
-| `install FILE [NAME]` | add a program to `/bin` so it becomes a command |
-| `reboot`, `poweroff` | restart / shut down |
+| View / search | `ls dir cat more head tail find grep wc sort uniq cut tr rev tac nl tee hexdump` |
+| Files / folders | `cp mv rm del mkdir rmdir touch ln chmod stat du df basename dirname cd pwd` |
+| Editor | `edit FILE` (Ctrl+O save, Ctrl+X exit) |
+| System | `mem free uptime date uname hostname id whoami dmesg ps kill sleep seq sync mount umount env export unset reboot halt poweroff` |
+| Other | `echo clear true false ver commands which install help` |
 
-The shell and editor are original code written for this project, not copied from
-BusyBox or any other shell.
+**Shell syntax:** pipes `a | b`, redirects `> >> <`, sequences `a ; b`,
+quotes `"..."` and `'...'`, variables `$VAR` and `$?`.
+
+Examples: `ls -l | grep rwx`, `cat log.txt | sort | uniq -c > counts.txt`,
+`find / -name "*.c" | wc -l`.
+
+All commands and the shell are original code written for this project, not
+copied from BusyBox or any other GPL software. They are reimplementations
+with the same names, with their own options and messages, so they are not
+byte-for-byte clones of BusyBox. Not included (they need much more in the
+kernel or are very large): networking tools, `vi`, `awk`, `sed`, `tar`.
 
 ### Adding commands (apps)
 
