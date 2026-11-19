@@ -11,7 +11,9 @@ JOBS="$(nproc)"
 mkdir -p build && cd build
 
 if [ ! -d "linux-$KERNEL_VERSION" ]; then
-  curl -LO "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz"
+  if [ ! -f "linux-${KERNEL_VERSION}.tar.xz" ]; then
+    curl -fLO "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz"
+  fi
   tar xf "linux-${KERNEL_VERSION}.tar.xz"
 fi
 

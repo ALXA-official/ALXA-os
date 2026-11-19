@@ -2,8 +2,8 @@
  * ALXA OS - init + shell
  * Original code by alxa, MIT licensed. Runs as PID 1.
  *
- * Shell syntax: cmd args | cmd2 > file >> file < file ; cmd2
- *               'single quotes'  "double quotes"  $VAR  $?
+ * Shell syntax: cmd args | cmd2 > file >> file < file ; cmd2 & cmd3
+ *               'single quotes'  "double quotes"  $VAR  $?  NAME=value  *.c
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -14,23 +14,25 @@
 #include <dirent.h>
 #include <errno.h>
 #include <ctype.h>
+#include <signal.h>
+#include <glob.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
 #include <sys/reboot.h>
 #include "editor.h"
 #include "cmds.h"
 
-#define VERSION  "0.4"
+#define VERSION  "0.5"
 #define MAXLINE  512
 #define MAXARGS  64
 #define MAXTOK   128
 #define MAXPIPE  8
 
-/* Folders searched for commands, in order. Drop a program in one of them
- * (or use the 'install' command) and it becomes a command. */
 static const char *pathdirs[] = { "/bin", "/usr/bin", "/usr/local/bin", "/sbin", NULL };
 static int last_status;
+static volatile sig_atomic_t in_fg;   /* 1 while we wait for a foreground command */
 
 static void setup_system(void) {
     mkdir("/dev", 0755);
@@ -45,7 +47,7 @@ static void setup_system(void) {
     const char *dirs[] = { "/bin", "/sbin", "/usr", "/usr/bin", "/usr/local",
                            "/usr/local/bin", "/tmp", "/etc", "/home", "/proc", NULL };
     for (int i = 0; dirs[i]; i++) mkdir(dirs[i], 0755);
-    mount("proc", "/proc", "proc", 0, NULL);          /* needed by ps, mount */
+    mount("proc", "/proc", "proc", 0, NULL);
     setenv("PATH", "/bin:/usr/bin:/usr/local/bin:/sbin", 1);
     setenv("HOME", "/home", 1);
     if (!getenv("TERM")) setenv("TERM", "linux", 1);
@@ -82,7 +84,8 @@ static int cmd_help(int argc, char **argv) {
     puts("");
     puts("Shell syntax:    cmd1 | cmd2     pipe        cmd > file     write to file");
     puts("                 cmd >> file     append      cmd < file     read from file");
-    puts("                 cmd1 ; cmd2     run both    \"quotes\" 'quotes'   $VAR   $?");
+    puts("                 cmd1 ; cmd2     run both    cmd &          run in background");
+    puts("                 \"quotes\" 'quotes'   $VAR   $?   NAME=value   *.txt  file?.c");
     puts("");
     puts("Programs in /bin, /usr/bin, /usr/local/bin or /sbin also run by name.");
     return 0;
@@ -205,7 +208,7 @@ static int cmd_install(int argc, char **argv) {
 /* ---------- parsing ---------- */
 
 enum { T_WORD, T_PIPE, T_IN, T_OUT, T_APP, T_SEMI };
-struct tok { int type; char *text; };
+struct tok { int type; char *text; int glob; };
 
 struct cmd {
     char *argv[MAXARGS];
@@ -255,16 +258,17 @@ static int tokenize(const char *s, struct tok *t, int max) {
         while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
         if (!*s) break;
         if (n >= max - 1) return -1;
-        if (*s == '|') { t[n++] = (struct tok){T_PIPE, NULL}; s++; continue; }
-        if (*s == ';') { t[n++] = (struct tok){T_SEMI, NULL}; s++; continue; }
-        if (*s == '<') { t[n++] = (struct tok){T_IN, NULL}; s++; continue; }
+        if (*s == '|') { t[n++] = (struct tok){T_PIPE, NULL, 0}; s++; continue; }
+        if (*s == ';') { t[n++] = (struct tok){T_SEMI, NULL, 0}; s++; continue; }
+        if (*s == '<') { t[n++] = (struct tok){T_IN, NULL, 0}; s++; continue; }
         if (*s == '>') {
-            if (s[1] == '>') { t[n++] = (struct tok){T_APP, NULL}; s += 2; }
-            else { t[n++] = (struct tok){T_OUT, NULL}; s++; }
+            if (s[1] == '>') { t[n++] = (struct tok){T_APP, NULL, 0}; s += 2; }
+            else { t[n++] = (struct tok){T_OUT, NULL, 0}; s++; }
             continue;
         }
         char w[1024];
         size_t wl = 0;
+        int gl = 0;                       /* saw an unquoted * ? [ */
         while (*s && !strchr(" \t\r\n|;<>", *s)) {
             if (*s == '\'') {
                 s++;
@@ -284,6 +288,7 @@ static int tokenize(const char *s, struct tok *t, int max) {
             } else if (*s == '$') {
                 expand_var(&s, w, &wl, sizeof w);
             } else {
+                if (*s == '*' || *s == '?' || *s == '[') gl = 1;
                 if (wl < sizeof w - 1) w[wl++] = *s;
                 s++;
             }
@@ -291,9 +296,35 @@ static int tokenize(const char *s, struct tok *t, int max) {
         w[wl] = 0;
         char *d = arena_dup(w, wl);
         if (!d) return -1;
-        t[n++] = (struct tok){T_WORD, d};
+        t[n++] = (struct tok){T_WORD, d, gl};
     }
     return n;
+}
+
+/* Copies the next command (up to an unquoted ; or &) into seg.
+ * Returns 1 if it ended with '&' (background), else 0.
+ * Sets *bad if it met '&&' (not supported). */
+static int next_segment(const char **sp, char *seg, size_t max, int *bad) {
+    const char *s = *sp;
+    size_t n = 0;
+    int bg = 0;
+    char q = 0;
+#define PUT(ch) do { if (n < max - 1) seg[n++] = (ch); } while (0)
+    for (; *s; s++) {
+        char c = *s;
+        if (q) {
+            if (c == q) q = 0;
+            else if (q == '"' && c == '\\' && s[1]) { PUT(c); c = *++s; }
+        } else if (c == '\'' || c == '"') q = c;
+        else if (c == '\\' && s[1]) { PUT(c); c = *++s; }
+        else if (c == ';') { s++; break; }
+        else if (c == '&') { if (s[1] == '&') *bad = 1; bg = 1; s++; break; }
+        PUT(c);
+    }
+#undef PUT
+    seg[n] = 0;
+    *sp = s;
+    return bg;
 }
 
 /* ---------- running commands ---------- */
@@ -339,90 +370,154 @@ static void child_exec(const struct cmd *c, const struct builtin *b) {
     _exit(126);
 }
 
-static int run_single(struct cmd *c) {
-    const struct builtin *b = find_builtin(c->argv[0]);
-    if (b && b->in_parent) {                 /* cd, export, unset: change the shell itself */
-        int s0 = dup(0), s1 = dup(1), rc;
-        if (apply_redirs(c) < 0) rc = 1;
-        else { rc = b->fn(c->argc, c->argv); fflush(stdout); }
-        dup2(s0, 0); dup2(s1, 1);
-        close(s0); close(s1);
-        return rc;
+static int run_pipeline(struct cmd *c, int n, int bg) {
+    /* cd, export, unset change the shell itself, so they run in-process */
+    if (n == 1 && !bg) {
+        const struct builtin *b = find_builtin(c[0].argv[0]);
+        if (b && b->in_parent) {
+            int s0 = dup(0), s1 = dup(1), rc;
+            if (apply_redirs(&c[0]) < 0) rc = 1;
+            else { rc = b->fn(c[0].argc, c[0].argv); fflush(stdout); }
+            dup2(s0, 0); dup2(s1, 1);
+            close(s0); close(s1);
+            return rc;
+        }
     }
-    fflush(NULL);
-    pid_t pid = fork();
-    if (pid < 0) { fputs("alxa: fork failed\n", stderr); return 1; }
-    if (pid == 0) {
-        if (apply_redirs(c) < 0) _exit(1);
-        child_exec(c, b);
-    }
-    return wait_for(pid);
-}
 
-static int run_pipeline(struct cmd *c, int n) {
-    if (n == 1) return run_single(&c[0]);
     fflush(NULL);
     pid_t pids[MAXPIPE];
+    for (int i = 0; i < MAXPIPE; i++) pids[i] = -1;
     int prev = -1;
+    pid_t pgid = 0;
     for (int i = 0; i < n; i++) {
         int fds[2] = {-1, -1};
-        pids[i] = -1;
         if (i < n - 1 && pipe(fds) < 0) { fputs("alxa: pipe failed\n", stderr); break; }
         pid_t pid = fork();
+        if (pid < 0) {
+            fputs("alxa: fork failed\n", stderr);
+            if (fds[0] >= 0) { close(fds[0]); close(fds[1]); }
+            break;
+        }
         if (pid == 0) {
+            signal(SIGINT, SIG_DFL);
+            signal(SIGQUIT, SIG_DFL);
+            if (bg) {
+                setpgid(0, pgid);              /* own group: Ctrl+C won't hit it */
+                if (i == 0 && !c[i].in) {
+                    int nf = open("/dev/null", O_RDONLY);
+                    if (nf >= 0) { dup2(nf, 0); close(nf); }
+                }
+            }
             if (prev >= 0) { dup2(prev, 0); close(prev); }
             if (fds[1] >= 0) { dup2(fds[1], 1); close(fds[1]); close(fds[0]); }
             if (apply_redirs(&c[i]) < 0) _exit(1);
             child_exec(&c[i], find_builtin(c[i].argv[0]));
         }
         pids[i] = pid;
+        if (bg) { if (!pgid) pgid = pid; setpgid(pid, pgid); }
         if (prev >= 0) close(prev);
         if (fds[1] >= 0) { close(fds[1]); prev = fds[0]; } else prev = -1;
     }
     if (prev >= 0) close(prev);
+
+    if (bg) {
+        if (pids[n - 1] > 0) printf("[%d]\n", (int)pids[n - 1]);
+        return 0;
+    }
     int st = 1;
     for (int i = 0; i < n; i++) st = wait_for(pids[i]);
     return st;
 }
 
-static void run_line(const char *line) {
+static int is_assign(const char *s) {
+    if (!(isalpha((unsigned char)*s) || *s == '_')) return 0;
+    while (isalnum((unsigned char)*s) || *s == '_') s++;
+    return *s == '=';
+}
+
+static void add_word(struct cmd *c, const struct tok *t) {
+    if (t->glob) {
+        glob_t g;
+        if (glob(t->text, 0, NULL, &g) == 0) {
+            for (size_t k = 0; k < g.gl_pathc && c->argc < MAXARGS - 1; k++) {
+                char *d = arena_dup(g.gl_pathv[k], strlen(g.gl_pathv[k]));
+                if (d) c->argv[c->argc++] = d;
+            }
+            globfree(&g);
+            return;
+        }
+        /* no match: keep the pattern as typed */
+    }
+    if (c->argc < MAXARGS - 1) c->argv[c->argc++] = t->text;
+}
+
+static void run_segment(const char *text, int bg) {
     struct tok t[MAXTOK];
-    int n = tokenize(line, t, MAXTOK);
+    int n = tokenize(text, t, MAXTOK);
     if (n < 0) { fputs("alxa: line too complex\n", stderr); last_status = 2; return; }
-    int i = 0;
-    while (i < n) {
-        struct cmd cmds[MAXPIPE];
-        memset(cmds, 0, sizeof cmds);
-        int nc = 0, bad = 0;
-        struct cmd *c = &cmds[0];
-        for (; i < n && t[i].type != T_SEMI; i++) {
-            switch (t[i].type) {
-            case T_WORD:
-                if (c->argc < MAXARGS - 1) c->argv[c->argc++] = t[i].text;
-                break;
-            case T_PIPE:
-                if (c->argc == 0 || nc + 1 >= MAXPIPE) bad = 1;
-                else c = &cmds[++nc];
-                break;
-            default:
-                if (i + 1 >= n || t[i + 1].type != T_WORD) bad = 1;
-                else {
-                    char *f = t[++i].text;
-                    if (t[i - 1].type == T_IN) c->in = f;
-                    else { c->out = f; c->append = (t[i - 1].type == T_APP); }
-                }
+
+    struct cmd cmds[MAXPIPE];
+    memset(cmds, 0, sizeof cmds);
+    int nc = 0, bad = 0, assigned = 0;
+    struct cmd *c = &cmds[0];
+    for (int i = 0; i < n; i++) {
+        switch (t[i].type) {
+        case T_WORD:
+            if (c->argc == 0 && nc == 0 && is_assign(t[i].text)) {
+                char *eq = strchr(t[i].text, '=');
+                *eq = 0;
+                setenv(t[i].text, eq + 1, 1);
+                assigned = 1;
+            } else add_word(c, &t[i]);
+            break;
+        case T_PIPE:
+            if (c->argc == 0 || nc + 1 >= MAXPIPE) bad = 1;
+            else c = &cmds[++nc];
+            break;
+        case T_SEMI:
+            break;
+        default:
+            if (i + 1 >= n || t[i + 1].type != T_WORD) bad = 1;
+            else {
+                char *f = t[++i].text;
+                if (t[i - 1].type == T_IN) c->in = f;
+                else { c->out = f; c->append = (t[i - 1].type == T_APP); }
             }
         }
-        i++;                                   /* skip the ';' */
-        int total = nc + 1;
-        if (total == 1 && c->argc == 0 && !c->in && !c->out && !bad) continue;   /* empty piece */
-        for (int k = 0; k < total; k++) if (cmds[k].argc == 0) bad = 1;
-        if (bad) { fputs("alxa: syntax error\n", stderr); last_status = 2; continue; }
-        last_status = run_pipeline(cmds, total);
+    }
+    if (nc == 0 && c->argc == 0 && !c->in && !c->out && !bad) {   /* empty or assignment only */
+        if (assigned) last_status = 0;
+        return;
+    }
+    int total = nc + 1;
+    for (int k = 0; k < total; k++) if (cmds[k].argc == 0) bad = 1;
+    if (bad) { fputs("alxa: syntax error\n", stderr); last_status = 2; return; }
+
+    in_fg = !bg;
+    last_status = run_pipeline(cmds, total, bg);
+    in_fg = 0;
+}
+
+static void run_line(const char *line) {
+    const char *p = line;
+    while (*p) {
+        char seg[MAXLINE];
+        int bad = 0;
+        int bg = next_segment(&p, seg, sizeof seg, &bad);
+        if (bad) { fputs("alxa: '&&' is not supported yet\n", stderr); last_status = 2; return; }
+        run_segment(seg, bg);
     }
 }
 
 /* ---------- main loop ---------- */
+
+static void on_sigchld(int sig) {
+    (void)sig;
+    if (in_fg) return;                 /* wait_for() needs that exit status */
+    int e = errno;
+    while (waitpid(-1, NULL, WNOHANG) > 0) ;
+    errno = e;
+}
 
 static void prompt(void) {
     char cwd[128];
@@ -435,7 +530,21 @@ static void prompt(void) {
 int main(void) {
     char line[MAXLINE];
 
-    if (getpid() == 1) setup_system();
+    if (getpid() == 1) {
+        setup_system();
+        setsid();                      /* own session, so the console can be our terminal */
+        ioctl(0, TIOCSCTTY, 0);        /* needed for Ctrl+C to reach programs */
+    }
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_sigchld;
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, NULL);
+    signal(SIGINT, SIG_IGN);           /* Ctrl+C must not kill the shell */
+    signal(SIGQUIT, SIG_IGN);
+
     banner();
 
     for (;;) {
@@ -444,6 +553,14 @@ int main(void) {
         if (!fgets(line, sizeof line, stdin)) {
             clearerr(stdin);
             pause();                    /* no input available: wait, never exit */
+            continue;
+        }
+        size_t len = strlen(line);
+        if (len == sizeof line - 1 && line[len - 1] != '\n') {
+            int ch;                     /* line too long: throw away the rest of it */
+            while ((ch = getchar()) != '\n' && ch != EOF) ;
+            fputs("alxa: line too long (max 511 characters)\n", stderr);
+            last_status = 2;
             continue;
         }
         run_line(line);
