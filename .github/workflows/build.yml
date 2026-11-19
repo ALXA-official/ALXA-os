@@ -13,6 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache kernel source download
+        uses: actions/cache@v4
+        with:
+          path: build/linux-*.tar.xz
+          key: kernel-src-6.12.1
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -31,6 +37,22 @@ jobs:
           cat boot.log
           grep -q "ALXA OS" boot.log
 
+      - name: Shell smoke test
+        run: |
+          {
+            sleep 12
+            echo 'FOO=zq9x';        sleep 1
+            echo 'echo ok-$FOO';    sleep 1
+            echo 'false ; echo st-$?'; sleep 1
+            echo 'echo /ini*';      sleep 1
+            echo 'sleep 1 &';       sleep 3
+          } | timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
+              -append "console=ttyS0" -nographic -m 64M > test.log 2>&1 || true
+          cat test.log
+          grep -q 'ok-zq9x' test.log     # NAME=value and $VAR
+          grep -q 'st-1' test.log        # $? is up to date after ';'
+          grep -q '^/init' test.log      # globbing
+
       - name: Upload build outputs
         uses: actions/upload-artifact@v4
         with:
@@ -40,3 +62,4 @@ jobs:
             initramfs.gz
             kernel.config
             boot.log
+            test.log
