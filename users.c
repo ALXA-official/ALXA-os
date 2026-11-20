@@ -223,9 +223,9 @@ int read_line(const char *prompt, char *buf, size_t size, int echo) {
     int tty = tcgetattr(0, &o) == 0;
     fputs(prompt, stdout);
     fflush(stdout);
-    if (tty && !echo) { n = o; n.c_lflag &= ~(tcflag_t)ECHO; tcsetattr(0, TCSAFLUSH, &n); }
+    if (tty && !echo) { n = o; n.c_lflag &= ~(tcflag_t)ECHO; tcsetattr(0, TCSADRAIN, &n); }
     ssize_t r = read(0, buf, size - 1);
-    if (tty && !echo) { tcsetattr(0, TCSAFLUSH, &o); fputs("\n", stdout); fflush(stdout); }
+    if (tty && !echo) { tcsetattr(0, TCSADRAIN, &o); fputs("\n", stdout); fflush(stdout); }
     if (r <= 0) { buf[0] = 0; return -1; }
     buf[r] = 0;
     while (r > 0 && (buf[r - 1] == '\n' || buf[r - 1] == '\r')) buf[--r] = 0;
