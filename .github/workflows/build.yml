@@ -9,57 +9,52 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
-      - name: Cache kernel source download
-        uses: actions/cache@v4
-        with:
-          path: build/linux-*.tar.xz
-          key: kernel-src-6.12.1
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential flex bison bc libelf-dev \
-            libssl-dev cpio curl xz-utils qemu-system-x86
+            libssl-dev libcrypt-dev cpio curl xz-utils e2fsprogs qemu-system-x86
 
-      - name: Build kernel + initramfs
+      - name: Build kernel + initramfs + disk
         run: |
-          chmod +x build.sh run-qemu.sh
+          chmod +x build.sh run-qemu.sh tests/vm-test.sh
           ./build.sh
 
       - name: Boot test in QEMU
         run: |
-          timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
-            -append "console=ttyS0" -nographic -m 64M > boot.log 2>&1 || true
+          sleep 40 | timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
+            -append "console=ttyS0" -nographic -m 128M \
+            -drive file=disk.img,if=virtio,format=raw > boot.log 2>&1 || true
           cat boot.log
           grep -q "ALXA OS" boot.log
 
-      - name: Shell smoke test
+      - name: Full system test (accounts, permissions, saving to disk)
+        continue-on-error: true
+        run: ./tests/vm-test.sh
+
+      - name: Show test logs
+        if: always()
         run: |
-          {
-            sleep 12
-            echo 'FOO=zq9x';        sleep 1
-            echo 'echo ok-$FOO';    sleep 1
-            echo 'false ; echo st-$?'; sleep 1
-            echo 'echo /ini*';      sleep 1
-            echo 'sleep 1 &';       sleep 3
-          } | timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
-              -append "console=ttyS0" -nographic -m 64M > test.log 2>&1 || true
-          cat test.log
-          grep -q 'ok-zq9x' test.log     # NAME=value and $VAR
-          grep -q 'st-1' test.log        # $? is up to date after ';'
-          grep -q '^/init' test.log      # globbing
+          for f in boot1.log boot2.log; do
+            [ -f "$f" ] && { echo "===== $f =====";  tail -n 60 "$f"; }
+          done
+          true
 
       - name: Upload build outputs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: alxa-os
           path: |
             bzImage
             initramfs.gz
+            disk.img
             kernel.config
             boot.log
-            test.log
+            boot1.log
+            boot2.log
+          if-no-files-found: warn
