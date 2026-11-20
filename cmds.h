@@ -17,5 +17,6 @@ int is_dir(const char *p);
 int copy_file(const char *src, const char *dst, mode_t mode);
 int copy_tree(const char *src, const char *dst);
 int remove_tree(const char *path);
+int mkdir_p(const char *path);
 
 #endif

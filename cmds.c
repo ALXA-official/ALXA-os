@@ -25,6 +25,7 @@
 #include <sys/klog.h>
 #include <sys/reboot.h>
 #include "cmds.h"
+#include "users.h"
 
 extern char **environ;
 
@@ -219,8 +220,9 @@ static int do_ls(int argc, char **argv, int lng) {
     if (i >= argc) return ls_one(argv[0], ".", all, lng, 0);
     int rc = 0, multi = argc - i > 1;
     for (; i < argc; i++) {
+        int was_dir = is_dir(argv[i]);
         if (ls_one(argv[0], argv[i], all, lng, multi)) rc = 1;
-        if (multi && i < argc - 1) putchar('\n');
+        if (multi && was_dir && i < argc - 1) putchar('\n');
     }
     return rc;
 }
@@ -297,7 +299,7 @@ static int cmd_echo(int argc, char **argv) {
     return 0;
 }
 
-static int mkdir_p(const char *path) {
+int mkdir_p(const char *path) {
     char tmp[1024];
     snprintf(tmp, sizeof tmp, "%s", path);
     for (char *p = tmp + 1; *p; p++) {
@@ -1030,14 +1032,69 @@ static int cmd_date(int argc, char **argv) {
 
 static int cmd_id(int argc, char **argv) {
     (void)argc; (void)argv;
-    printf("uid=%u%s gid=%u%s\n", getuid(), getuid() == 0 ? "(root)" : "", getgid(), getgid() == 0 ? "(root)" : "");
+    users_load();
+    const struct user *u = user_by_uid(getuid()), *g = user_by_gid(getgid());
+    printf("uid=%u", getuid());
+    if (u) printf("(%s)", u->name);
+    printf(" gid=%u", getgid());
+    if (g) printf("(%s)", g->name);
+    putchar('\n');
     return 0;
 }
 static int cmd_whoami(int argc, char **argv) {
     (void)argc; (void)argv;
-    if (getuid() == 0) puts("root"); else printf("uid%u\n", getuid());
+    users_load();
+    const struct user *u = user_by_uid(getuid());
+    if (u) puts(u->name); else printf("uid%u\n", getuid());
     return 0;
 }
+
+static int chown_one(const char *path, uid_t u, gid_t g, int rec) {
+    int rc = 0;
+    if (lchown(path, u, g) < 0) { err("chown", path, errno); rc = 1; }
+    struct stat st;
+    if (rec && lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (!d) return 1;
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            char full[1024];
+            snprintf(full, sizeof full, "%s/%s", path, e->d_name);
+            if (chown_one(full, u, g, 1)) rc = 1;
+        }
+        closedir(d);
+    }
+    return rc;
+}
+static int cmd_chown(int argc, char **argv) {
+    int rec = 0, i = 1;
+    if (i < argc && !strcmp(argv[i], "-R")) { rec = 1; i++; }
+    if (argc - i < 2) { fputs("usage: chown [-R] USER[:GROUP] FILE...\n", stderr); return 1; }
+    users_load();
+    char spec[96];
+    snprintf(spec, sizeof spec, "%s", argv[i]);
+    char *colon = strchr(spec, ':');
+    if (colon) *colon = 0;
+    uid_t uid = (uid_t)-1;
+    gid_t gid = (gid_t)-1;
+    if (spec[0]) {
+        const struct user *u = user_find(spec);
+        if (u) uid = u->uid;
+        else if (isdigit((unsigned char)spec[0])) uid = (uid_t)atol(spec);
+        else { fprintf(stderr, "chown: unknown user %s\n", spec); return 1; }
+    }
+    if (colon && colon[1]) {
+        const struct user *g = user_find(colon + 1);
+        if (g) gid = g->gid;
+        else if (isdigit((unsigned char)colon[1])) gid = (gid_t)atol(colon + 1);
+        else { fprintf(stderr, "chown: unknown group %s\n", colon + 1); return 1; }
+    }
+    int rc = 0;
+    for (i++; i < argc; i++) if (chown_one(argv[i], uid, gid, rec)) rc = 1;
+    return rc;
+}
+
 static int cmd_hostname(int argc, char **argv) {
     char b[256];
     if (argc > 1) {
@@ -1207,7 +1264,7 @@ const struct builtin extra_builtins[] = {
     {"more", cmd_more, 0}, {"hexdump", cmd_hexdump, 0},
     {"cd", cmd_cd, 1}, {"pwd", cmd_pwd, 0},
     {"mem", cmd_mem, 0}, {"free", cmd_free, 0}, {"uptime", cmd_uptime, 0}, {"date", cmd_date, 0},
-    {"id", cmd_id, 0}, {"whoami", cmd_whoami, 0}, {"hostname", cmd_hostname, 0}, {"uname", cmd_uname, 0},
+    {"id", cmd_id, 0}, {"chown", cmd_chown, 0}, {"whoami", cmd_whoami, 0}, {"hostname", cmd_hostname, 0}, {"uname", cmd_uname, 0},
     {"kill", cmd_kill, 0}, {"sleep", cmd_sleep, 0}, {"seq", cmd_seq, 0},
     {"true", cmd_true, 0}, {"false", cmd_false, 0}, {"sync", cmd_sync, 0}, {"halt", cmd_halt, 0},
     {"dmesg", cmd_dmesg, 0}, {"mount", cmd_mount, 0}, {"umount", cmd_umount, 0}, {"ps", cmd_ps, 0},
