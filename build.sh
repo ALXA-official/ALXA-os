@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ALXA OS - builds a tiny Linux kernel + initramfs (+ a blank data disk).
+# Magnesium OS - builds a tiny Linux kernel + initramfs (+ a blank data disk).
 # Requires: gcc, make, flex, bison, bc, libelf-dev, libssl-dev, libcrypt-dev,
 #           cpio, gzip, curl, xz, e2fsprogs (for the disk image; optional)
 set -euo pipefail
@@ -68,12 +68,12 @@ mkdir -p rootfs/sbin
 cp ../init rootfs/sbin/passwd
 chmod 4755 rootfs/sbin/passwd
 # Anything in overlay/ is copied into the OS. Put programs in overlay/bin/ and
-# they become commands (they must be statically linked: ALXA OS has no libraries).
+# they become commands (they must be statically linked: Magnesium OS has no libraries).
 if [ -d ../overlay ]; then
   cp -a ../overlay/. rootfs/
   rm -f rootfs/bin/.gitkeep
 fi
-# --owner=0:0 makes every file belong to root inside ALXA OS, not to whoever built it.
+# --owner=0:0 makes every file belong to root inside Magnesium OS, not to whoever built it.
 (cd rootfs && find . | cpio -o -H newc --owner=0:0 2>/dev/null | gzip > ../../initramfs.gz)
 if zcat ../../initramfs.gz | cpio -tv 2>/dev/null | awk '{print $3}' | grep -qv '^root$'; then
   echo "WARNING: some files in the image are not owned by root; check your cpio version."
@@ -84,7 +84,7 @@ cd ..
 if command -v mke2fs >/dev/null 2>&1; then
   rm -f disk.img
   truncate -s 32M disk.img
-  mke2fs -q -t ext2 -F -L ALXADATA -E root_owner=0:0 disk.img
+  mke2fs -q -t ext2 -F -L MAGNESIUMDATA -E root_owner=0:0 disk.img
   echo "Done: bzImage + initramfs.gz + disk.img. Run ./run-qemu.sh"
 else
   echo "Done: bzImage + initramfs.gz (no disk.img: install e2fsprogs to make one). Run ./run-qemu.sh"

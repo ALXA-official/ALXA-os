@@ -1,5 +1,5 @@
 /*
- * ALXA OS - interactive line editor for the shell: cursor keys, history
+ * Magnesium OS - interactive line editor for the shell: cursor keys, history
  * (Up/Down), Tab completion, Ctrl+U/K/W/L/C/D.
  * Original code by alxa, MIT licensed.
  */

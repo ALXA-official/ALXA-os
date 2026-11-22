@@ -1,5 +1,5 @@
 /*
- * ALXA OS - the shell.
+ * Magnesium OS - the shell.
  * Original code by alxa, MIT licensed.
  *
  * Syntax: cmd args | cmd2   > file  >> file  < file   cmd1 ; cmd2
@@ -25,6 +25,7 @@
 #include "users.h"
 #include "line.h"
 #include "shell.h"
+#include "version.h"
 
 #define MAXLINE  512
 #define MAXARGS  64
@@ -69,7 +70,7 @@ static int cmd_help(int argc, char **argv) {
     return 0;
 }
 
-static int cmd_ver(int argc, char **argv) { (void)argc; (void)argv; puts("ALXA OS 0.5 - made by alxa"); return 0; }
+static int cmd_ver(int argc, char **argv) { (void)argc; (void)argv; puts(OS_NAME " " OS_VERSION_LONG " - made by " OS_AUTHOR); return 0; }
 
 static int cmd_clear(int argc, char **argv) { (void)argc; (void)argv; fputs("\033[2J\033[H", stdout); return 0; }
 
@@ -348,12 +349,12 @@ static int wait_for(pid_t pid) {
 static int apply_redirs(const struct cmd *c) {
     if (c->in) {
         int fd = open(c->in, O_RDONLY);
-        if (fd < 0) { fprintf(stderr, "alxa: %s: %s\n", c->in, strerror(errno)); return -1; }
+        if (fd < 0) { fprintf(stderr, "mg: %s: %s\n", c->in, strerror(errno)); return -1; }
         dup2(fd, 0); close(fd);
     }
     if (c->out) {
         int fd = open(c->out, O_WRONLY | O_CREAT | (c->append ? O_APPEND : O_TRUNC), 0644);
-        if (fd < 0) { fprintf(stderr, "alxa: %s: %s\n", c->out, strerror(errno)); return -1; }
+        if (fd < 0) { fprintf(stderr, "mg: %s: %s\n", c->out, strerror(errno)); return -1; }
         dup2(fd, 1); close(fd);
     }
     return 0;
@@ -381,7 +382,7 @@ static void child_exec(const struct cmd *c, const struct builtin *b) {
         fprintf(stderr, "%s: command not found\n", c->argv[0]);
         _exit(127);
     }
-    if (is_script(path)) {                      /* "#!" scripts run with the ALXA shell */
+    if (is_script(path)) {                      /* "#!" scripts run with the Magnesium shell */
         int rc = shell_run_script(path);
         fflush(NULL);
         _exit(rc & 0xff);
@@ -420,9 +421,9 @@ static int run_pipeline(struct cmd *c, int n, int bg) {
     for (int i = 0; i < n; i++) {
         int fds[2] = {-1, -1};
         pids[i] = -1;
-        if (i < n - 1 && pipe(fds) < 0) { fputs("alxa: pipe failed\n", stderr); break; }
+        if (i < n - 1 && pipe(fds) < 0) { fputs("mg: pipe failed\n", stderr); break; }
         pid_t pid = fork();
-        if (pid < 0) { fputs("alxa: fork failed\n", stderr); if (fds[0] >= 0) { close(fds[0]); close(fds[1]); } break; }
+        if (pid < 0) { fputs("mg: fork failed\n", stderr); if (fds[0] >= 0) { close(fds[0]); close(fds[1]); } break; }
         if (pid == 0) {
             child_setup(pgid, !bg);
             if (prev >= 0) { dup2(prev, 0); close(prev); }
@@ -504,7 +505,7 @@ static void run_segment(const char *seg, int bg) {
     struct lex lx;
     struct tok t[MAXTOK];
     int n = tokenize(&lx, seg, t, MAXTOK);
-    if (n < 0) { fputs("alxa: line too complex\n", stderr); last_status = 2; return; }
+    if (n < 0) { fputs("mg: line too complex\n", stderr); last_status = 2; return; }
     if (n == 0) return;
     struct cmd cmds[MAXPIPE];
     memset(cmds, 0, sizeof cmds);
@@ -527,7 +528,7 @@ static void run_segment(const char *seg, int bg) {
         }
     }
     for (int k = 0; k <= nc; k++) if (cmds[k].argc == 0) bad = 1;
-    if (bad) { fputs("alxa: syntax error\n", stderr); last_status = 2; return; }
+    if (bad) { fputs("mg: syntax error\n", stderr); last_status = 2; return; }
     last_status = run_pipeline(cmds, nc + 1, bg);
 }
 
@@ -636,10 +637,10 @@ static void build_prompt(char *out, size_t size) {
         snprintf(shown, sizeof shown, "~%s", cwd + hl);
     else snprintf(shown, sizeof shown, "%s", cwd);
     const char *user = getenv("USER");
-    if (!user) user = "alxa";
+    if (!user) user = OS_SHORT;
     char sign = getuid() == 0 ? '#' : '$';
-    if (isatty(1)) snprintf(out, size, "\033[1;32m%s@alxa\033[0m:\033[1;34m%s\033[0m%c ", user, shown, sign);
-    else snprintf(out, size, "%s@alxa:%s%c ", user, shown, sign);
+    if (isatty(1)) snprintf(out, size, "\033[1;32m%s@" OS_SHORT "\033[0m:\033[1;34m%s\033[0m%c ", user, shown, sign);
+    else snprintf(out, size, "%s@" OS_SHORT ":%s%c ", user, shown, sign);
 }
 
 static int read_command(const char *prompt, char *line, size_t size) {

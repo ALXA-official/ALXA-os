@@ -1,5 +1,5 @@
-#ifndef ALXA_USERS_H
-#define ALXA_USERS_H
+#ifndef MG_USERS_H
+#define MG_USERS_H
 #include <stddef.h>
 #include <sys/types.h>
 

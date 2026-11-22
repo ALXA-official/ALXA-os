@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boots ALXA OS twice on a scratch copy of disk.img and drives the console like a
+# Boots Magnesium OS twice on a scratch copy of disk.img and drives the console like a
 # person would: it waits for each prompt before typing. Checks first-start setup,
 # login, permissions, and that accounts and files survive a reboot.
 # Needs: qemu-system-x86_64, bzImage, initramfs.gz, disk.img.
@@ -47,14 +47,14 @@ boot1() {
   vm_wait "Username (press Enter" 1 || return 1; vm_send tester
   vm_wait "New password: " 2 || return 1;       vm_send testerpassword1
   vm_wait "Retype password: " 2 || return 1;    vm_send testerpassword1
-  vm_wait "alxa login: " 1 || return 1;         vm_send tester
+  vm_wait "magnesium login: " 1 || return 1;         vm_send tester
   vm_wait "Password: " 1 || return 1;           vm_send testerpassword1
   vm_wait "Welcome, tester" 1 || return 1;      sleep 3
   vm_cmd whoami
   vm_cmd "cat /data/etc/shadow"
   vm_cmd "touch /bin/x"
   vm_cmd exit
-  vm_wait "alxa login: " 2 || return 1;         vm_send root
+  vm_wait "magnesium login: " 2 || return 1;         vm_send root
   vm_wait "Password: " 2 || return 1;           vm_send rootpassword1
   vm_wait "Welcome, root" 1 || return 1;        sleep 3
   vm_cmd "echo persisted > ~/note.txt"
@@ -64,7 +64,7 @@ boot1() {
 }
 
 boot2() {
-  vm_wait "alxa login: " 1 120 || return 1;     vm_send root
+  vm_wait "magnesium login: " 1 120 || return 1;     vm_send root
   vm_wait "Password: " 1 || return 1;           vm_send rootpassword1
   vm_wait "Welcome, root" 1 || return 1;        sleep 3
   vm_cmd "cat ~/note.txt"

@@ -1,5 +1,5 @@
-#ifndef ALXA_CMDS_H
-#define ALXA_CMDS_H
+#ifndef MG_CMDS_H
+#define MG_CMDS_H
 #include <sys/types.h>
 
 /* A shell command. in_parent=1 means it must run inside the shell itself

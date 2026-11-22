@@ -1,5 +1,5 @@
-#ifndef ALXA_LINE_H
-#define ALXA_LINE_H
+#ifndef MG_LINE_H
+#define MG_LINE_H
 #include <stddef.h>
 
 /* Completion callback: fills *out with a malloc'd array of malloc'd strings

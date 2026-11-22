@@ -1,5 +1,5 @@
 /*
- * ALXA OS - init (PID 1): system setup, disk, login and sessions.
+ * Magnesium OS - init (PID 1): system setup, disk, login and sessions.
  * Original code by alxa, MIT licensed.
  *
  * This one program is several things, chosen by the name it is started as:
@@ -22,12 +22,13 @@
 #include "cmds.h"
 #include "users.h"
 #include "shell.h"
+#include "version.h"
 
-#ifndef ALXA_ETC_DIR
-#define ALXA_ETC_DIR "/etc"
+#ifndef MG_ETC_DIR
+#define MG_ETC_DIR "/etc"
 #endif
-#ifndef ALXA_HOME_DIR
-#define ALXA_HOME_DIR "/home"
+#ifndef MG_HOME_DIR
+#define MG_HOME_DIR "/home"
 #endif
 
 static int persistent;           /* 1 when the data disk is mounted on /data */
@@ -155,7 +156,7 @@ static void login_cycle(void) {
     users_load();
     if (!users_exist()) { first_start(); return; }
     char name[64], pw[128];
-    if (read_line("alxa login: ", name, sizeof name, 1) < 0) { sleep(1); return; }
+    if (read_line(OS_SHORT " login: ", name, sizeof name, 1) < 0) { sleep(1); return; }
     if (!name[0]) return;
     if (read_password("Password: ", pw, sizeof pw) < 0) { sleep(1); return; }
     const struct user *u = user_find(name);
@@ -172,11 +173,11 @@ static void login_cycle(void) {
 }
 
 static void init_loop(void) {
-    users_set_dir(persistent ? "/data/etc" : ALXA_ETC_DIR);
-    users_set_homebase(persistent ? "/data/home" : ALXA_HOME_DIR);
+    users_set_dir(persistent ? "/data/etc" : MG_ETC_DIR);
+    users_set_homebase(persistent ? "/data/home" : MG_HOME_DIR);
     puts("");
-    puts("  ALXA OS 0.5 - made by alxa");
-    puts("  Linux kernel + alxa shell");
+    puts("  " OS_NAME " " OS_VERSION_LONG);
+    puts("  Made by " OS_AUTHOR " - Linux kernel + Magnesium shell");
     puts("");
     for (;;) login_cycle();
 }

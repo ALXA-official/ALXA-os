@@ -1,5 +1,5 @@
 /*
- * ALXA OS - accounts, password hashing and the passwd helper.
+ * Magnesium OS - accounts, password hashing and the passwd helper.
  * Original code by alxa, MIT licensed.
  *
  * Files:  <etc>/passwd  (public)   name:uid:gid:home
@@ -22,14 +22,14 @@
 #include "users.h"
 #include "cmds.h"
 
-#ifndef ALXA_ETC_DIR
-#define ALXA_ETC_DIR "/etc"
+#ifndef MG_ETC_DIR
+#define MG_ETC_DIR "/etc"
 #endif
-#ifndef ALXA_DATA_DIR
-#define ALXA_DATA_DIR "/data"
+#ifndef MG_DATA_DIR
+#define MG_DATA_DIR "/data"
 #endif
 
-static char etc_dir[160] = ALXA_ETC_DIR;
+static char etc_dir[160] = MG_ETC_DIR;
 static char homebase[160] = "/home";
 static struct user db[MAXUSERS];
 static int ndb;
@@ -40,10 +40,10 @@ const char *users_homebase(void) { return homebase; }
 
 void users_autodetect_dir(void) {
     char p[256];
-    snprintf(p, sizeof p, "%s/etc/passwd", ALXA_DATA_DIR);
+    snprintf(p, sizeof p, "%s/etc/passwd", MG_DATA_DIR);
     if (access(p, F_OK) == 0) {
-        snprintf(etc_dir, sizeof etc_dir, "%s/etc", ALXA_DATA_DIR);
-        snprintf(homebase, sizeof homebase, "%s/home", ALXA_DATA_DIR);
+        snprintf(etc_dir, sizeof etc_dir, "%s/etc", MG_DATA_DIR);
+        snprintf(homebase, sizeof homebase, "%s/home", MG_DATA_DIR);
     }
 }
 

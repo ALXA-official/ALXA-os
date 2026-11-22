@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boots ALXA OS in QEMU. If disk.img exists it is attached as the data disk,
+# Boots Magnesium OS in QEMU. If disk.img exists it is attached as the data disk,
 # so your accounts and files survive a reboot. Exit QEMU with Ctrl+A then X.
 DISK=()
 [ -f disk.img ] && DISK=(-drive file=disk.img,if=virtio,format=raw)

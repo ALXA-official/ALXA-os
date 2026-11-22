@@ -1,5 +1,5 @@
 /*
- * ALXA OS - command set (files, text, system tools).
+ * Magnesium OS - command set (files, text, system tools).
  * Original implementations written by alxa, MIT licensed.
  * Not derived from BusyBox or any other GPL code.
  */

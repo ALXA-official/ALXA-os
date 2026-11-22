@@ -1,5 +1,5 @@
 /*
- * ALXA OS - "edit": a small full-screen, colored terminal text editor.
+ * Magnesium OS - "edit": a small full-screen, colored terminal text editor.
  * Original code by alxa, MIT licensed.
  *
  * Keys: arrows/Home/End/PgUp/PgDn move, Delete/Backspace erase,
@@ -257,7 +257,7 @@ static void draw(void) {
     oa("\x1b[?25l\x1b[H");
 
     char t[300];
-    snprintf(t, sizeof t, " ALXA edit  %s%s", fname, dirty ? "  [modified]" : "");
+    snprintf(t, sizeof t, " Magnesium edit  %s%s", fname, dirty ? "  [modified]" : "");
     oa("\x1b[44;97m");
     oaf("%-*.*s", cols, cols, t);
     oa("\x1b[0m\r\n");

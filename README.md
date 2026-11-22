@@ -1,6 +1,9 @@
-# ALXA OS
+# Magnesium OS v.A1 (version alpha 1)
 
 Made by **alxa**.
+
+> Alpha software: expect rough edges and missing features. Do not use it for
+> anything important, and keep backups of `disk.img`.
 
 An extremely minimal operating system: the Linux kernel plus one custom program
 (init, login, shell, editor and about 70 commands). No desktop environment, no
@@ -9,7 +12,7 @@ third-party shell, no distribution, no applications.
 ## Build and run
 
 The easiest way is GitHub Actions: every push builds everything and uploads
-`bzImage`, `initramfs.gz` and `disk.img` as the `alxa-os` artifact.
+`bzImage`, `initramfs.gz` and `disk.img` as the `magnesium-os` artifact.
 
 On a Linux machine (or a Codespace):
 
@@ -23,10 +26,10 @@ Exit QEMU with `Ctrl+A` then `X`. To run a downloaded build:
 
 ## First start, accounts and security
 
-1. On the very first boot there are no accounts. ALXA OS asks you to create the
+1. On the very first boot there are no accounts. Magnesium OS asks you to create the
    administrator (`root`) password, then optionally a regular user. **There is
    no default password.** Passwords need 8+ characters.
-2. After that you get an `alxa login:` prompt. Failed logins are slowed down.
+2. After that you get an `magnesium login:` prompt. Failed logins are slowed down.
 3. Passwords are stored only as salted SHA-512 hashes, in a file only root can read.
 4. Regular users cannot read other users' home folders (`0700`), cannot touch
    system files, and cannot reboot or mount. Use a regular user for daily work.
@@ -37,7 +40,7 @@ Exit QEMU with `Ctrl+A` then `X`. To run a downloaded build:
 ## Saving to disk
 
 `disk.img` is a blank 32 MB ext2 disk. When it is attached (`run-qemu.sh` does
-this automatically), ALXA OS mounts it on `/data` and keeps your **accounts,
+this automatically), Magnesium OS mounts it on `/data` and keeps your **accounts,
 home folders and installed programs** there, so they survive reboots.
 Without a disk everything lives in RAM and is lost on reboot.
 
@@ -61,7 +64,7 @@ background `a &`, comments `#`, quotes, `$VAR`, `$?`, `~`, wildcards `* ? []`.
 Keys: Up/Down history, Tab completion, Ctrl+C stops a running program or
 cancels the line, Ctrl+D logs out.
 
-Scripts: a file starting with `#!` that is executable runs with the ALXA shell
+Scripts: a file starting with `#!` that is executable runs with the Magnesium shell
 (`source FILE` runs it inside the current shell).
 
 Not included: `awk`, `sed`, `tar`, `vi`, networking, `su`/`sudo`, `if`/`for`
@@ -77,7 +80,7 @@ runs by its name. Ways to add one:
   or `/bin` (RAM only, when no disk is attached).
 
 Programs must be **statically linked** (for example `gcc -static`), because
-ALXA OS contains no shared libraries.
+Magnesium OS contains no shared libraries.
 
 ## Tests
 
@@ -96,6 +99,6 @@ Actions runs it on every push.
 - Password hashing uses the C library's `crypt()` (libxcrypt, LGPL). The
   binaries are statically linked; if you distribute them, keep the LGPL
   obligations of the libraries in mind.
-- "Linux" is a trademark of Linus Torvalds. ALXA OS is an independent project
+- "Linux" is a trademark of Linus Torvalds. Magnesium OS is an independent project
   and is not affiliated with or endorsed by the Linux kernel project or the
   Linux Foundation.
