@@ -1,4 +1,4 @@
-name: Build ALXA OS
+name: Build Magnesium OS
 
 on:
   push:
@@ -30,7 +30,7 @@ jobs:
             -append "console=ttyS0" -nographic -m 128M \
             -drive file=disk.img,if=virtio,format=raw > boot.log 2>&1 || true
           cat boot.log
-          grep -q "ALXA OS" boot.log
+          grep -q "Magnesium OS" boot.log
 
       - name: Full system test (accounts, permissions, saving to disk)
         continue-on-error: true
@@ -40,7 +40,7 @@ jobs:
         if: always()
         run: |
           for f in boot1.log boot2.log; do
-            [ -f "$f" ] && { echo "===== $f =====";  tail -n 60 "$f"; }
+            [ -f "$f" ] && { echo "===== $f ====="; tail -n 60 "$f"; }
           done
           true
 
@@ -48,7 +48,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alxa-os
+          name: magnesium-os
           path: |
             bzImage
             initramfs.gz
