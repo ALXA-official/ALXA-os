@@ -23,6 +23,7 @@
 #include "users.h"
 #include "shell.h"
 #include "version.h"
+#include "registry.h"
 
 #ifndef MG_ETC_DIR
 #define MG_ETC_DIR "/etc"
@@ -139,6 +140,8 @@ static void run_session(const struct user *u) {
         setenv("USER", me.name, 1);
         setenv("LOGNAME", me.name, 1);
         setenv("TERM", termcopy, 1);
+        { char up[200]; snprintf(up, sizeof up, "%s/.mg-registry", me.home); reg_set_paths(NULL, up); }
+        reg_apply_env();
         umask(022);
         if (chdir(me.home) < 0 && chdir("/") < 0) _exit(1);
         printf("\nWelcome, %s. Type 'help' for commands.\n\n", me.name);
@@ -154,6 +157,7 @@ static void login_cycle(void) {
     static int failures;
     while (waitpid(-1, NULL, WNOHANG) > 0) ;         /* reap orphans (PID 1 duty) */
     users_load();
+    reg_refresh();                                   /* settings may have changed in a session */
     if (!users_exist()) { first_start(); return; }
     char name[64], pw[128];
     if (read_line(OS_SHORT " login: ", name, sizeof name, 1) < 0) { sleep(1); return; }
@@ -164,7 +168,10 @@ static void login_cycle(void) {
     memset(pw, 0, sizeof pw);
     if (!ok) {
         failures++;
-        sleep(failures < 3 ? 2 : 5);
+        int base = atoi(reg_get(HIVE_SYSTEM, "Security/LoginDelay", "2"));
+        if (base < 0) base = 0;
+        if (base > 30) base = 30;
+        sleep((unsigned)(failures < 3 ? base : base * 2 + 1));
         puts("Login incorrect\n");
         return;
     }
@@ -175,6 +182,11 @@ static void login_cycle(void) {
 static void init_loop(void) {
     users_set_dir(persistent ? "/data/etc" : MG_ETC_DIR);
     users_set_homebase(persistent ? "/data/home" : MG_HOME_DIR);
+    {
+        char rp[200];
+        snprintf(rp, sizeof rp, "%s/registry", persistent ? "/data/etc" : MG_ETC_DIR);
+        reg_set_paths(rp, "");               /* system settings and variables */
+    }
     puts("");
     puts("  " OS_NAME " " OS_VERSION_LONG);
     puts("  Made by " OS_AUTHOR " - Linux kernel + Magnesium shell");

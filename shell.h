@@ -4,4 +4,6 @@
 void shell_session(void);
 /* Runs the commands in a script file. Returns the last command's status. */
 int shell_run_script(const char *path);
+/* Runs one command line as if typed at the prompt. Returns its status. */
+int shell_exec_line(const char *line);
 #endif

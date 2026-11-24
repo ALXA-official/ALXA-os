@@ -58,7 +58,7 @@ cp arch/x86/boot/bzImage ../../bzImage
 cd ..
 
 # 2) initramfs: our programs only, statically linked (no libraries in the OS)
-gcc -static -O2 -o ../init ../boot.c ../shell.c ../users.c ../line.c ../cmds.c ../editor.c -lcrypt
+gcc -static -O2 -o ../init ../boot.c ../shell.c ../users.c ../line.c ../cmds.c ../editor.c ../registry.c ../gui.c -lcrypt
 rm -rf rootfs && mkdir rootfs
 cp ../init rootfs/init
 chmod 755 rootfs/init

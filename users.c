@@ -21,6 +21,7 @@
 #include <crypt.h>
 #include "users.h"
 #include "cmds.h"
+#include "registry.h"
 
 #ifndef MG_ETC_DIR
 #define MG_ETC_DIR "/etc"
@@ -37,6 +38,7 @@ static int ndb;
 void users_set_dir(const char *d) { snprintf(etc_dir, sizeof etc_dir, "%s", d); }
 void users_set_homebase(const char *d) { snprintf(homebase, sizeof homebase, "%s", d); }
 const char *users_homebase(void) { return homebase; }
+const char *users_etc_dir(void) { return etc_dir; }
 
 void users_autodetect_dir(void) {
     char p[256];
@@ -211,8 +213,17 @@ int user_make_home(const char *home, uid_t uid, gid_t gid) {
     return chmod(home, 0700);
 }
 
+int password_min_length(void) {
+    reg_refresh();
+    int n = atoi(reg_get(HIVE_SYSTEM, "Security/MinPasswordLength", "8"));
+    if (n < 4) n = 4;
+    if (n > 64) n = 64;
+    return n;
+}
+
 int password_policy_ok(const char *pw) {
-    if (strlen(pw) < 8) { fputs("Password must be at least 8 characters.\n", stderr); return 0; }
+    int min = password_min_length();
+    if ((int)strlen(pw) < min) { fprintf(stderr, "Password must be at least %d characters.\n", min); return 0; }
     return 1;
 }
 
@@ -256,6 +267,11 @@ int passwd_main(int argc, char **argv) {
     uid_t ruid = getuid();
     clearenv();                                 /* never trust the caller's environment */
     users_autodetect_dir();
+    {
+        char rp[200];
+        snprintf(rp, sizeof rp, "%s/registry", etc_dir);
+        reg_set_paths(rp, "");               /* only the system rules matter here */
+    }
     umask(077);
     if (users_load() == 0) { fputs("passwd: no accounts found\n", stderr); return 1; }
     const struct user *me = user_by_uid(ruid);

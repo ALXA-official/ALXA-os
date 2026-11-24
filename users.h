@@ -16,6 +16,8 @@ struct user {
 void users_set_dir(const char *dir);          /* where passwd/shadow live */
 void users_set_homebase(const char *dir);     /* where home folders live */
 const char *users_homebase(void);
+const char *users_etc_dir(void);
+int password_min_length(void);
 void users_autodetect_dir(void);              /* use /data/etc if the disk is mounted */
 
 int users_load(void);                         /* returns number of accounts */

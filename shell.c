@@ -24,6 +24,8 @@
 #include "cmds.h"
 #include "users.h"
 #include "line.h"
+#include "gui.h"
+#include "registry.h"
 #include "shell.h"
 #include "version.h"
 
@@ -62,6 +64,8 @@ static int cmd_help(int argc, char **argv) {
     puts("                 env export unset reboot halt poweroff");
     puts("Accounts:        id whoami users passwd adduser deluser exit(logout)");
     puts("Shell:           echo clear true false history source sh ver commands which install help");
+    puts("Desktop:         desktop   (windows, Start menu, Settings, Registry Editor)");
+    puts("Registry:        reg list | reg get KEY | reg set KEY VALUE | reg del KEY");
     puts("");
     puts("Syntax:  a | b   a > f   a >> f   a < f   a ; b   a && b   a || b   a &   # comment");
     puts("         \"quotes\"  'quotes'  $VAR  $?  ~  wildcards (* ? [])");
@@ -96,6 +100,12 @@ static int cmd_poweroff(int argc, char **argv) {
 
 static int cmd_exit(int argc, char **argv) { (void)argc; (void)argv; want_exit = 1; return 0; }
 
+static int cmd_desktop(int argc, char **argv) {
+    (void)argc; (void)argv;
+    if (gui_run() == GUI_LOGOUT) want_exit = 1;
+    return 0;
+}
+
 static int cmd_history(int argc, char **argv) {
     (void)argc; (void)argv;
     for (int i = 0; i < line_history_count(); i++) printf("%5d  %s\n", i + 1, line_history_get(i));
@@ -126,6 +136,7 @@ static const struct builtin core_builtins[] = {
     {"reboot", cmd_reboot, 0}, {"poweroff", cmd_poweroff, 0},
     {"exit", cmd_exit, 1}, {"logout", cmd_exit, 1}, {"history", cmd_history, 0},
     {"source", cmd_source, 1}, {"sh", cmd_sh, 0},
+    {"desktop", cmd_desktop, 1}, {"reg", cmd_reg, 0},
     {"adduser", cmd_adduser, 0}, {"deluser", cmd_deluser, 0}, {"users", cmd_users, 0},
     {NULL, NULL, 0}
 };
@@ -629,18 +640,24 @@ static int complete(const char *word, int first, char ***outp) {
 /* ---------- main loop ---------- */
 
 static void build_prompt(char *out, size_t size) {
-    char cwd[256], shown[280];
+    char cwd[256], pre[96] = "";
     if (!getcwd(cwd, sizeof cwd)) snprintf(cwd, sizeof cwd, "?");
-    const char *home = getenv("HOME");
-    size_t hl = home ? strlen(home) : 0;
-    if (hl > 1 && !strncmp(cwd, home, hl) && (cwd[hl] == '/' || !cwd[hl]))
-        snprintf(shown, sizeof shown, "~%s", cwd + hl);
-    else snprintf(shown, sizeof shown, "%s", cwd);
     const char *user = getenv("USER");
-    if (!user) user = OS_SHORT;
-    char sign = getuid() == 0 ? '#' : '$';
-    if (isatty(1)) snprintf(out, size, "\033[1;32m%s@" OS_SHORT "\033[0m:\033[1;34m%s\033[0m%c ", user, shown, sign);
-    else snprintf(out, size, "%s@" OS_SHORT ":%s%c ", user, shown, sign);
+    int tty = isatty(1);
+    int root = getuid() == 0;
+    if (reg_eff_int("Shell/ShowUser", 0)) {
+        if (tty) snprintf(pre, sizeof pre, "\033[1;32m%s@" OS_SHORT "\033[0m ", user ? user : OS_SHORT);
+        else snprintf(pre, sizeof pre, "%s@" OS_SHORT " ", user ? user : OS_SHORT);
+    }
+    int classic = !strcasecmp(reg_eff("Shell/Prompt", "Arrow"), "Classic");
+    if (classic) {
+        if (tty) snprintf(out, size, "%s\033[1;34m%s\033[0m %c ", pre, cwd, root ? '#' : '$');
+        else snprintf(out, size, "%s%s %c ", pre, cwd, root ? '#' : '$');
+    } else {
+        /* /folder ---->   (the arrow is red for root, green for everyone else) */
+        if (tty) snprintf(out, size, "%s\033[1;34m%s\033[0m %s----> \033[0m", pre, cwd, root ? "\033[1;31m" : "\033[1;32m");
+        else snprintf(out, size, "%s%s ----> ", pre, cwd);
+    }
 }
 
 static int read_command(const char *prompt, char *line, size_t size) {
@@ -654,12 +671,27 @@ static int read_command(const char *prompt, char *line, size_t size) {
     return 1;
 }
 
+int shell_exec_line(const char *line) {
+    run_line(line);
+    return last_status;
+}
+
 void shell_session(void) {
     char line[MAXLINE], prompt[700];
     jobs_init();
     line_set_completer(complete);
     want_exit = 0;
+    const char *home = getenv("HOME");
+    if (home && *home) {
+        char up[300];
+        snprintf(up, sizeof up, "%s/.mg-registry", home);
+        reg_set_paths(NULL, up);              /* this user's own settings */
+    }
+    reg_apply_env();                          /* Environment values become real variables */
+    if (isatty(0) && reg_eff_int("Desktop/AutoStart", 0)) cmd_desktop(0, NULL);
     for (;;) {
+        if (want_exit) break;
+        reg_refresh();
         while (waitpid(-1, NULL, WNOHANG) > 0) ;     /* reap finished background jobs */
         build_prompt(prompt, sizeof prompt);
         if (!read_command(prompt, line, sizeof line)) { if (isatty(0)) puts("logout"); break; }
