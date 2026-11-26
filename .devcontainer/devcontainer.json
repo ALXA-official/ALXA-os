@@ -1,0 +1,12 @@
+{
+  "name": "Magnesium OS (Browser Desktop)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential flex bison bc libelf-dev libssl-dev libcrypt-dev cpio curl xz-utils e2fsprogs qemu-system-x86 novnc websockify gh && chmod +x build.sh run-qemu.sh run-web.sh tests/vm-test.sh",
+  "forwardPorts": [6080],
+  "portsAttributes": {
+    "6080": {
+      "label": "Magnesium OS Desktop",
+      "onAutoForward": "openBrowser"
+    }
+  }
+}
