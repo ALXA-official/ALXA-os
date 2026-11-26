@@ -21,27 +21,27 @@ jobs:
 
       - name: Build kernel + initramfs + disk
         run: |
-          chmod +x build.sh run-qemu.sh tests/vm-test.sh
+          chmod +x build.sh run-qemu.sh run-web.sh tests/vm-test.sh
           ./build.sh
 
       - name: Boot test (Basic Display firmware framebuffer mode - no GPU driver)
         run: |
-          timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
+          timeout 20 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
             -append "vga=792 nomodeset console=ttyS0 console=tty0" \
             -vga std -display none -serial file:boot-basic.log -m 256M \
             -drive file=disk.img,if=virtio,format=raw || true
           cat boot-basic.log
-          grep -q "Magnesium OS" boot-basic.log
+          grep -q "Magnesium OS.*Basic-Display.*driver=simpledrm" boot-basic.log
 
       - name: Boot test (Native VirtIO-GPU KMS driver mode)
         run: |
-          timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
+          timeout 20 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
             -append "console=ttyS0 console=tty0" \
             -vga none -device virtio-gpu-pci,xres=1280,yres=800 \
             -display none -serial file:boot-gpu.log -m 256M \
             -drive file=disk.img,if=virtio,format=raw || true
           cat boot-gpu.log
-          grep -q "Magnesium OS" boot-gpu.log
+          grep -q "Magnesium OS.*GPU-KMS.*driver=virtio_gpu" boot-gpu.log
 
       - name: Full system test (accounts, permissions, saving to disk)
         continue-on-error: true

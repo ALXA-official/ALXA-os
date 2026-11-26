@@ -9,6 +9,7 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -236,6 +237,23 @@ static void login_cycle(void) {
     run_session(u, 0);
 }
 
+static void log_kmsg(const char *fmt, ...) {
+    int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+    if (fd < 0) fd = open("/dev/ttyS0", O_WRONLY | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) return;
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        size_t len = (size_t)(n < (int)sizeof buf ? n : (int)sizeof buf - 1);
+        ssize_t w = write(fd, buf, len);
+        (void)w;
+    }
+    close(fd);
+}
+
 static void init_loop(void) {
     users_set_dir(persistent ? "/data/etc" : MG_ETC_DIR);
     users_set_homebase(persistent ? "/data/home" : MG_HOME_DIR);
@@ -248,6 +266,14 @@ static void init_loop(void) {
     puts("  " OS_NAME " " OS_VERSION_LONG);
     puts("  Made by " OS_AUTHOR " - Linux kernel + Magnesium shell");
     puts("");
+    struct gfx_info gi;
+    if (gfx_probe(&gi) != GFX_NONE)
+        log_kmsg("<6>%s %s: graphics ready [%s] driver=%s %dx%d\n",
+                 OS_NAME, OS_VERSION,
+                 gi.backend == GFX_GPU_DRIVER ? "GPU-KMS" : "Basic-Display",
+                 gi.driver, gi.width, gi.height);
+    else
+        log_kmsg("<6>%s %s: serial console ready\n", OS_NAME, OS_VERSION);
     for (;;) login_cycle();
 }
 

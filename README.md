@@ -29,7 +29,26 @@ Magnesium OS uses the same two-tier graphics architecture as Linux and Windows:
      (`DRM_IOCTL_MODE_PAGE_FLIP`), and a GPU hardware cursor plane
      (`DRM_IOCTL_MODE_CURSOR`).
 
-## Build and run
+## Run online in your browser (no local install)
+
+1. On GitHub, click **Code -> Codespaces -> Create codespace** on your branch.
+2. Once the terminal opens, run:
+
+       ./run-web.sh
+
+   (`run-web.sh` automatically grabs the latest pre-built `magnesium-os`
+   artifact from GitHub Actions if available, or builds locally, and serves the
+   live pixel display + mouse + keyboard over noVNC on port `6080`.)
+3. Click the **Open in Browser** prompt for port `6080` (or open the forwarded
+   port `6080` URL from the **Ports** tab). You can also test no-GPU-driver
+   fallback mode in the browser with `GPU=basic ./run-web.sh`.
+
+> Note: browser-only emulators like `copy.sh/v86` are 32-bit x86 (`i686`) only
+> and cannot boot Magnesium OS's 64-bit (`x86_64`) kernel. Use GitHub Codespaces
+> + `./run-web.sh` (or any cloud Linux VM) to run the real 64-bit OS with KVM
+> and `virtio-gpu` in your browser.
+
+## Build and run locally
 
 The easiest way is GitHub Actions: every push builds everything and uploads
 `bzImage`, `initramfs.gz` and `disk.img` as the `magnesium-os` artifact.
