@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <grp.h>
+#include <dirent.h>
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -22,6 +23,8 @@
 #include "cmds.h"
 #include "users.h"
 #include "shell.h"
+#include "gfx.h"
+#include "gui.h"
 #include "version.h"
 #include "registry.h"
 
@@ -72,13 +75,48 @@ static void setup_system(void) {
         }
     }
     const char *dirs[] = { "/bin", "/sbin", "/usr", "/usr/bin", "/usr/local",
-                           "/usr/local/bin", "/tmp", "/etc", "/home", "/proc", NULL };
+                           "/usr/local/bin", "/tmp", "/etc", "/home", "/proc", "/sys",
+                           "/dev/pts", "/dev/shm", NULL };
     for (int i = 0; dirs[i]; i++) mkdir(dirs[i], 0755);
     chmod("/tmp", 01777);                            /* everyone can write, only owners can delete */
+    chmod("/dev/shm", 01777);
     mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL);
+    mount("sysfs", "/sys", "sysfs", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL);
+    mount("devpts", "/dev/pts", "devpts", MS_NOSUID | MS_NOEXEC, NULL);
+    mount("tmpfs", "/dev/shm", "tmpfs", MS_NOSUID | MS_NODEV, NULL);
+    chmod("/dev/ptmx", 0666);
     mount_disk();
     setenv("PATH", "/bin:/usr/bin:/usr/local/bin:/sbin:/data/bin", 1);
     if (!getenv("TERM")) setenv("TERM", "linux", 1);
+}
+
+static void chown_dir_devs(const char *dir, uid_t uid, gid_t gid, mode_t mode) {
+    DIR *dp = opendir(dir);
+    if (!dp) return;
+    struct dirent *e;
+    while ((e = readdir(dp)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char p[128];
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (chown(p, uid, gid) < 0) { /* ignore */ }
+        chmod(p, mode);
+    }
+    closedir(dp);
+}
+
+/* Grant/revoke local display & input seat access for the active console user. */
+static void set_seat_owner(uid_t uid, gid_t gid, mode_t mode) {
+    if (geteuid() != 0) return;
+    chown_dir_devs("/dev/dri", uid, gid, mode);
+    chown_dir_devs("/dev/input", uid, gid, mode);
+    const char *devs[] = { "/dev/fb0", "/dev/fb1", "/dev/tty0", "/dev/tty1", NULL };
+    for (int i = 0; devs[i]; i++) {
+        if (access(devs[i], F_OK) == 0) {
+            if (chown(devs[i], uid, gid) < 0) { /* ignore */ }
+            chmod(devs[i], mode);
+        }
+    }
+    chmod("/dev/ptmx", 0666);
 }
 
 static void reset_console(void) {
@@ -120,11 +158,12 @@ static void first_start(void) {
 
 /* ---------- login and sessions ---------- */
 
-static void run_session(const struct user *u) {
+static void run_session(const struct user *u, int graphical) {
     struct user me = *u;                  /* copy: the table may be reloaded */
+    if (graphical) set_seat_owner(me.uid, me.gid, 0660);
     fflush(NULL);
     pid_t pid = fork();
-    if (pid < 0) { puts("fork failed"); return; }
+    if (pid < 0) { if (graphical) set_seat_owner(0, 0, 0600); puts("fork failed"); return; }
     if (pid == 0) {
         setsid();
         ioctl(0, TIOCSCTTY, 1);           /* make the console this session's terminal */
@@ -140,16 +179,18 @@ static void run_session(const struct user *u) {
         setenv("USER", me.name, 1);
         setenv("LOGNAME", me.name, 1);
         setenv("TERM", termcopy, 1);
+        if (graphical) setenv("MG_GRAPHICAL_LOGIN", "1", 1);
         { char up[200]; snprintf(up, sizeof up, "%s/.mg-registry", me.home); reg_set_paths(NULL, up); }
         reg_apply_env();
         umask(022);
         if (chdir(me.home) < 0 && chdir("/") < 0) _exit(1);
-        printf("\nWelcome, %s. Type 'help' for commands.\n\n", me.name);
+        if (!graphical) printf("\nWelcome, %s. Type 'help' for commands.\n\n", me.name);
         shell_session();
         _exit(0);
     }
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR) ;
+    if (graphical) set_seat_owner(0, 0, 0600);
     reset_console();
 }
 
@@ -158,8 +199,24 @@ static void login_cycle(void) {
     while (waitpid(-1, NULL, WNOHANG) > 0) ;         /* reap orphans (PID 1 duty) */
     users_load();
     reg_refresh();                                   /* settings may have changed in a session */
-    if (!users_exist()) { first_start(); return; }
+
+    int graphical = gfx_is_local_vt() && gfx_probe(NULL) != GFX_NONE;
+    if (!users_exist()) {
+        if (graphical && gui_first_start() == 0) return;
+        first_start();
+        return;
+    }
+
     char name[64], pw[128];
+    if (graphical) {
+        if (gui_login(name, sizeof name) == 0) {
+            users_load();
+            const struct user *u = user_find(name);
+            if (u) { failures = 0; run_session(u, 1); }
+            return;
+        }
+    }
+
     if (read_line(OS_SHORT " login: ", name, sizeof name, 1) < 0) { sleep(1); return; }
     if (!name[0]) return;
     if (read_password("Password: ", pw, sizeof pw) < 0) { sleep(1); return; }
@@ -176,7 +233,7 @@ static void login_cycle(void) {
         return;
     }
     failures = 0;
-    run_session(u);
+    run_session(u, 0);
 }
 
 static void init_loop(void) {

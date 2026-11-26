@@ -24,13 +24,24 @@ jobs:
           chmod +x build.sh run-qemu.sh tests/vm-test.sh
           ./build.sh
 
-      - name: Boot test in QEMU
+      - name: Boot test (Basic Display firmware framebuffer mode - no GPU driver)
         run: |
-          sleep 40 | timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
-            -append "console=ttyS0" -nographic -m 128M \
-            -drive file=disk.img,if=virtio,format=raw > boot.log 2>&1 || true
-          cat boot.log
-          grep -q "Magnesium OS" boot.log
+          timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
+            -append "vga=792 nomodeset console=ttyS0 console=tty0" \
+            -vga std -display none -serial file:boot-basic.log -m 256M \
+            -drive file=disk.img,if=virtio,format=raw || true
+          cat boot-basic.log
+          grep -q "Magnesium OS" boot-basic.log
+
+      - name: Boot test (Native VirtIO-GPU KMS driver mode)
+        run: |
+          timeout 40 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
+            -append "console=ttyS0 console=tty0" \
+            -vga none -device virtio-gpu-pci,xres=1280,yres=800 \
+            -display none -serial file:boot-gpu.log -m 256M \
+            -drive file=disk.img,if=virtio,format=raw || true
+          cat boot-gpu.log
+          grep -q "Magnesium OS" boot-gpu.log
 
       - name: Full system test (accounts, permissions, saving to disk)
         continue-on-error: true
@@ -39,7 +50,7 @@ jobs:
       - name: Show test logs
         if: always()
         run: |
-          for f in boot1.log boot2.log; do
+          for f in boot-basic.log boot-gpu.log boot1.log boot2.log; do
             [ -f "$f" ] && { echo "===== $f ====="; tail -n 60 "$f"; }
           done
           true
@@ -54,7 +65,8 @@ jobs:
             initramfs.gz
             disk.img
             kernel.config
-            boot.log
+            boot-basic.log
+            boot-gpu.log
             boot1.log
             boot2.log
           if-no-files-found: warn

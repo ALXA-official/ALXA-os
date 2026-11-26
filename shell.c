@@ -24,6 +24,7 @@
 #include "cmds.h"
 #include "users.h"
 #include "line.h"
+#include "gfx.h"
 #include "gui.h"
 #include "registry.h"
 #include "shell.h"
@@ -64,7 +65,8 @@ static int cmd_help(int argc, char **argv) {
     puts("                 env export unset reboot halt poweroff");
     puts("Accounts:        id whoami users passwd adduser deluser exit(logout)");
     puts("Shell:           echo clear true false history source sh ver commands which install help");
-    puts("Desktop:         desktop   (windows, Start menu, Settings, Registry Editor)");
+    puts("Desktop:         desktop   (pixel desktop, Terminal, Settings, Registry Editor)");
+    puts("Display / GPU:   display   (or 'gpu': active GPU driver / Basic Display info)");
     puts("Registry:        reg list | reg get KEY | reg set KEY VALUE | reg del KEY");
     puts("");
     puts("Syntax:  a | b   a > f   a >> f   a < f   a ; b   a && b   a || b   a &   # comment");
@@ -136,7 +138,7 @@ static const struct builtin core_builtins[] = {
     {"reboot", cmd_reboot, 0}, {"poweroff", cmd_poweroff, 0},
     {"exit", cmd_exit, 1}, {"logout", cmd_exit, 1}, {"history", cmd_history, 0},
     {"source", cmd_source, 1}, {"sh", cmd_sh, 0},
-    {"desktop", cmd_desktop, 1}, {"reg", cmd_reg, 0},
+    {"desktop", cmd_desktop, 1}, {"display", cmd_display, 0}, {"gpu", cmd_display, 0}, {"reg", cmd_reg, 0},
     {"adduser", cmd_adduser, 0}, {"deluser", cmd_deluser, 0}, {"users", cmd_users, 0},
     {NULL, NULL, 0}
 };
@@ -688,7 +690,12 @@ void shell_session(void) {
         reg_set_paths(NULL, up);              /* this user's own settings */
     }
     reg_apply_env();                          /* Environment values become real variables */
-    if (isatty(0) && reg_eff_int("Desktop/AutoStart", 0)) cmd_desktop(0, NULL);
+    int def_auto = getenv("MG_GRAPHICAL_LOGIN") ? 1 : 0;
+    if (!getenv("MG_IN_DESKTOP") && isatty(0) && reg_eff_int("Desktop/AutoStart", def_auto)) {
+        setenv("MG_IN_DESKTOP", "1", 1);
+        cmd_desktop(0, NULL);
+        unsetenv("MG_IN_DESKTOP");
+    }
     for (;;) {
         if (want_exit) break;
         reg_refresh();
