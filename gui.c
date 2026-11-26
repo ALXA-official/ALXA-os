@@ -297,7 +297,7 @@ enum {
     A_SET_HOME, A_SET_CAT, A_SET_ROW,
     A_REG_NODE, A_REG_VAL,
     A_DLG_OK, A_DLG_CANCEL,
-    A_DESK_ICON, A_CTX_ITEM, A_CTX_CLOSE
+    A_DESK_ICON, A_DESK_FILE, A_CTX_ITEM, A_CTX_CLOSE
 };
 
 struct hot { int x, y, w, h, act, a, b, wid; };
@@ -2512,11 +2512,149 @@ static const struct { const char *sym, *label; int kind; const char *arg; } desk
     { "Tm", "Terminal", WK_TERMINAL,  NULL },
 };
 
+/* ================= Desktop folder (~/Desktop): your own icons ================= */
+/* Files and folders in ~/Desktop show as icons. Drag an icon to move it; the
+ * position is saved in the registry (Desktop/IconPos/<name>). Click opens it. */
+#define DESK_MAXF 64
+#define DESK_IW   84
+#define DESK_IH   66
+struct desk_item { char name[64]; char sym[3]; int is_dir, is_exec, saved; int x, y; };
+static struct desk_item desk_items[DESK_MAXF];
+static int ndesk_items;
+static time_t desk_scan_t;
+static int desk_drag = -1, desk_drag_moved, desk_drag_ox, desk_drag_oy, desk_drag_sx, desk_drag_sy;
+
+static void desk_path(char *out, size_t n) {
+    const char *home = getenv("HOME");
+    snprintf(out, n, "%s/Desktop", home && home[0] ? home : "/root");
+}
+
+static int desk_name_cmp(const void *a, const void *b) {
+    return strcasecmp(((const struct desk_item *)a)->name, ((const struct desk_item *)b)->name);
+}
+
+static void desk_scan(void) {
+    char dir[256];
+    desk_path(dir, sizeof dir);
+    mkdir(dir, 0755);
+    desk_scan_t = time(NULL);
+    ndesk_items = 0;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while (ndesk_items < DESK_MAXF && (de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char full[384];
+        snprintf(full, sizeof full, "%s/%s", dir, de->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0) continue;
+        struct desk_item *it = &desk_items[ndesk_items];
+        memset(it, 0, sizeof *it);
+        snprintf(it->name, sizeof it->name, "%s", de->d_name);
+        it->is_dir = S_ISDIR(st.st_mode);
+        it->is_exec = !it->is_dir && (st.st_mode & S_IXUSR) != 0;
+        const char *dot = strrchr(de->d_name, '.');
+        if (it->is_dir) snprintf(it->sym, sizeof it->sym, "Fd");
+        else if (img_is_supported(de->d_name)) snprintf(it->sym, sizeof it->sym, "Pv");
+        else if (dot && (!strcasecmp(dot, ".mpg") || !strcasecmp(dot, ".mpeg"))) snprintf(it->sym, sizeof it->sym, "Vp");
+        else if (it->is_exec) snprintf(it->sym, sizeof it->sym, "Ex");
+        else snprintf(it->sym, sizeof it->sym, "Tx");
+        ndesk_items++;
+    }
+    closedir(d);
+    qsort(desk_items, (size_t)ndesk_items, sizeof desk_items[0], desk_name_cmp);
+    for (int i = 0; i < ndesk_items; i++) {
+        char key[160];
+        snprintf(key, sizeof key, "Desktop/IconPos/%.100s", desk_items[i].name);
+        int x, y;
+        if (sscanf(reg_get(HIVE_USER, key, ""), "%d,%d", &x, &y) == 2) {
+            desk_items[i].x = x; desk_items[i].y = y; desk_items[i].saved = 1;
+        }
+    }
+}
+
+/* Icons without a saved position fill a column grid on the right-hand side. */
+static void desk_layout_default(int W) {
+    int col = 0, row = 0, rows = (desk_y1 - desk_y0 - 28) / (DESK_IH + 10);
+    if (rows < 1) rows = 1;
+    for (int i = 0; i < ndesk_items; i++) {
+        if (desk_items[i].saved || i == desk_drag) continue;
+        desk_items[i].x = W - 16 - DESK_IW - col * (DESK_IW + 12);
+        desk_items[i].y = desk_y0 + 14 + row * (DESK_IH + 10);
+        if (++row >= rows) { row = 0; col++; }
+    }
+}
+
+static void desk_open_item(const struct desk_item *it) {
+    char dir[256], full[384];
+    desk_path(dir, sizeof dir);
+    snprintf(full, sizeof full, "%s/%s", dir, it->name);
+    desk_hidden = 0;
+    if (it->is_dir) open_win_arg(WK_FILES, full);
+    else if (!strcmp(it->sym, "Pv")) open_win_arg(WK_IMGVIEW, full);
+    else if (!strcmp(it->sym, "Vp")) open_win_arg(WK_VIDEO, full);
+    else if (!strcmp(it->sym, "Ex")) toast("Run %s from Terminal", it->name);
+    else open_win_arg(WK_NOTES, full);
+}
+
+static void draw_desk_files(const struct pal *p, int W) {
+    if (desk_drag < 0 && time(NULL) - desk_scan_t >= 2) desk_scan();
+    desk_layout_default(W);
+    for (int i = 0; i < ndesk_items; i++) {
+        const struct desk_item *it = &desk_items[i];
+        int hov = i == desk_drag || point_in(hover_x, hover_y, it->x, it->y, DESK_IW, DESK_IH);
+        gfx_rrect_alpha(it->x, it->y, DESK_IW, DESK_IH, 8, hov ? p->sel : p->win, hov ? 205 : 135);
+        gfx_rrect_outline(it->x, it->y, DESK_IW, DESK_IH, 8, hov ? cf.acc : p->border);
+        int sw = gfx_text_width(it->sym, 2);
+        gfx_text(it->x + (DESK_IW - sw) / 2, it->y + 8, it->sym, cf.acc, 1, 2, DESK_IW - 8);
+        char lab[16];
+        snprintf(lab, sizeof lab, "%.13s", it->name);
+        int lw = gfx_text_width(lab, 1);
+        gfx_text(it->x + (DESK_IW - lw) / 2, it->y + 44, lab, p->winfg, 0, 1, DESK_IW - 6);
+        hot_add(it->x, it->y, DESK_IW, DESK_IH, A_DESK_FILE, i, 0);
+    }
+}
+
+static void desk_drag_begin(int idx, int x, int y) {
+    desk_drag = idx;
+    desk_drag_moved = 0;
+    desk_drag_ox = x - desk_items[idx].x;
+    desk_drag_oy = y - desk_items[idx].y;
+    desk_drag_sx = x;
+    desk_drag_sy = y;
+}
+
+static void desk_drag_move(int x, int y) {
+    if (desk_drag < 0 || desk_drag >= ndesk_items) return;
+    if (abs(x - desk_drag_sx) + abs(y - desk_drag_sy) > 4) desk_drag_moved = 1;
+    int nx = x - desk_drag_ox, ny = y - desk_drag_oy, W = gfx_width();
+    if (nx < 0) nx = 0;
+    if (nx > W - DESK_IW) nx = W - DESK_IW;
+    if (ny < desk_y0) ny = desk_y0;
+    if (ny > desk_y1 - DESK_IH) ny = desk_y1 - DESK_IH;
+    desk_items[desk_drag].x = nx;
+    desk_items[desk_drag].y = ny;
+}
+
+static void desk_drag_end(void) {
+    int idx = desk_drag;
+    desk_drag = -1;
+    if (idx < 0 || idx >= ndesk_items) return;
+    struct desk_item *it = &desk_items[idx];
+    if (!desk_drag_moved) { desk_open_item(it); return; }
+    it->saved = 1;
+    char key[160], val[32];
+    snprintf(key, sizeof key, "Desktop/IconPos/%.100s", it->name);
+    snprintf(val, sizeof val, "%d,%d", it->x, it->y);
+    if (reg_set(HIVE_USER, key, val) < 0) save_error("the icon position");
+}
+
 static void draw_desktop_icons(void) {
-    if (!cf.desk_icons) return;
-    const struct pal *p = &cf.p;
     reset_ui_clip();
     cur_wid = 0;
+    draw_desk_files(&cf.p, gfx_width());
+    if (!cf.desk_icons) return;
+    const struct pal *p = &cf.p;
     int ix = 16, iy = desk_y0 + 14;
     int iw = 76, ih = 66, gap = 10;
 
@@ -2544,6 +2682,7 @@ static const char *const ctx_labels[] = {
     "Toggle VaporGlass",
     "Edit ~/.mg.conf (Manual)",
     "Display & Theme Settings",
+    "Open Desktop folder",
     NULL
 };
 
@@ -2805,6 +2944,13 @@ static void handle_ctx_action(int idx) {
         open_win(WK_SETTINGS);
         open_cat(1);
         break;
+    case 6: {
+        char dir[256];
+        desk_path(dir, sizeof dir);
+        mkdir(dir, 0755);
+        open_win_arg(WK_FILES, dir);
+        break;
+    }
     }
 }
 
@@ -2812,6 +2958,12 @@ static int on_mouse(const struct gfx_mouse *mev) {
     int x = mev->x, y = mev->y;
     int prev_hx = hover_x, prev_hy = hover_y;
     hover_x = x; hover_y = y;
+
+    /* Desktop folder icon drag in progress */
+    if (desk_drag >= 0) {
+        if (mev->kind == GM_MOVE && (mev->buttons_down & 1)) { desk_drag_move(x, y); return 1; }
+        if (mev->kind == GM_RELEASE) { desk_drag_end(); return 1; }
+    }
 
     if (mev->kind == GM_WHEEL) {
         int d = mev->wheel;
@@ -2875,6 +3027,10 @@ static int on_mouse(const struct gfx_mouse *mev) {
         return 0;
     }
     struct hot hh = *h;
+    if (hh.act == A_DESK_FILE) {
+        if (mev->kind == GM_PRESS) desk_drag_begin(hh.a, x, y);
+        return 1;
+    }
     struct win *w = hh.wid ? win_by_id(hh.wid) : NULL;
     if (w) raise_win(w);
 
