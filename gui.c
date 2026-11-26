@@ -33,6 +33,7 @@
 #include <sys/reboot.h>
 #include "gui.h"
 #include "gui_apps.h"
+#include "imgcodec.h"
 #include "gfx.h"
 #include "net.h"
 #include "registry.h"
@@ -59,7 +60,7 @@ struct pal {
 
 #define THEME_LIST  "Magnesium|Frost|Aurora|Obsidian|Ember|Cobalt|Sakura|Classic"
 #define ACCENT_LIST "Sky|Orange|Cyan|Emerald|Violet|Gold|Crimson|Mint"
-#define BG_LIST     "Aurora|Gradient|Nebula|Prism|Grid|Solid"
+#define BG_LIST     "Aurora|Gradient|Nebula|Prism|Grid|Solid|Picture"
 #define GLASS_LIST  "VaporGlass|Frosted|Clear|Solid"
 #define BLUR_LIST   "Off|Low|Medium|High"
 #define FONT_LIST   "Smooth|Subpixel|Crisp"
@@ -105,7 +106,10 @@ struct cfg {
     int sheen;               /* 0..40 */
     int radius;              /* 0..16 */
     int font_mode;           /* GFX_FONT_SMOOTH / SUBPIXEL / CRISP */
-    int bgpat;               /* 0=Aurora, 1=Gradient, 2=Nebula, 3=Prism, 4=Grid, 5=Solid */
+    int bgpat;               /* 0=Aurora, 1=Gradient, 2=Nebula, 3=Prism, 4=Grid, 5=Solid, 6=Picture */
+    int refresh;             /* target refresh rate in Hz (Display/Refresh) */
+    char pic_path[256];      /* Desktop/Picture: wallpaper image file */
+    char cursor_path[256];   /* Display/CursorFile: cursor image file */
     int desk_icons;          /* 1 = show desktop shortcut tiles */
     int floating_bar;        /* 1 = floating VaporGlass dock */
     int top, clock, h12, secs, date, controls, labels, offset;
@@ -187,6 +191,22 @@ static void rebuild_res_opts(void) {
     }
 }
 
+/* Cursor image: loaded once per path. Failing files fall back to the built-in arrow. */
+static char cur_applied_path[256];
+static void sync_cursor(void) {
+    if (!strcmp(cur_applied_path, cf.cursor_path)) return;
+    snprintf(cur_applied_path, sizeof cur_applied_path, "%s", cf.cursor_path);
+    mg_image ci = { 0, 0, NULL };
+    char err[160];
+    if (cf.cursor_path[0] && img_load_file(cf.cursor_path, &ci, err, sizeof err) == 0 &&
+        gfx_cursor_set(ci.px, ci.w, ci.h, 0, 0) == 0) {
+        img_free(&ci);
+        return;
+    }
+    img_free(&ci);
+    gfx_cursor_set(NULL, 0, 0, 0, 0);
+}
+
 static void load_cfg(void) {
     reg_refresh();
     const char *tname = reg_eff("Display/Theme", "Magnesium");
@@ -240,6 +260,11 @@ static void load_cfg(void) {
     int b = opt_index(BG_LIST, reg_eff("Desktop/Background", "Aurora"));
     if (b < 0 && !strcasecmp(reg_eff("Desktop/Background", ""), "Dots")) b = 4;
     cf.bgpat = b < 0 ? 0 : b;
+    snprintf(cf.pic_path, sizeof cf.pic_path, "%s", reg_eff("Desktop/Picture", ""));
+    snprintf(cf.cursor_path, sizeof cf.cursor_path, "%s", reg_eff("Display/CursorFile", ""));
+    cf.refresh = reg_eff_int("Display/Refresh", 60);
+    if (cf.refresh != gfx_get_refresh()) gfx_set_refresh(cf.refresh);
+    sync_cursor();
     cf.desk_icons = reg_eff_int("Desktop/Icons", 1);
     cf.floating_bar = opt_index("Floating|Docked", reg_eff("Taskbar/Style", t == 7 ? "Docked" : "Floating")) == 0;
     cf.top = opt_index("Top|Bottom", reg_eff("Taskbar/Position", "Top")) != 1;
@@ -901,7 +926,10 @@ static const struct row r_display[] = {
     CHO("Accent color", "Highlights, active headers, and 12 Mg badge", "Display/Accent", ACCENT_LIST, "Sky"),
     CHO("Glass effect", "Translucent frosted crystal optics (not Windows Aero)", "Display/Glass", GLASS_LIST, "VaporGlass"),
     CHO("Font smoothing", "Anti-aliased smooth, LCD subpixel, or crisp bitmap", "Display/FontSmoothing", FONT_LIST, "Smooth"),
-    CHO("Wallpaper", "Aurora ribbons, nebula, prism, gradient, grid, solid", "Desktop/Background", BG_LIST, "Aurora"),
+    CHO("Wallpaper", "Aurora, gradient, nebula, prism, grid, solid, or picture", "Desktop/Background", BG_LIST, "Aurora"),
+    { R_TEXT, "Wallpaper picture file", "Used by Picture wallpaper: BMP, PNG, JPG, GIF, TGA and more", "Desktop/Picture", 0, "", 0, 0 },
+    CHO("Refresh rate", "Target frame rate; the nearest display mode is chosen", "Display/Refresh", "24|30|60|75|90|120|144|165|240", "60"),
+    { R_TEXT, "Cursor image file", "PNG or other picture up to 64x64 px; empty = built-in arrow", "Display/CursorFile", 0, "", 0, 0 },
 };
 
 static const struct row r_manual[] = {
@@ -1791,6 +1819,7 @@ static const char *const *menu_items(int kind, int m) {
 
 static void close_win(struct win *w) {
     if (w->kind == WK_TERMINAL) term_stop();
+    media_release(w->kind);
     int i;
     for (i = 0; i < nz; i++) if (zord[i] == w->id) break;
     for (; i < nz - 1; i++) zord[i] = zord[i + 1];
@@ -1811,6 +1840,9 @@ static const char *kind_sym(int kind) {
     case WK_SYSMON:    return "Sm";
     case WK_NETCENTER: return "Nc";
     case WK_MINES:     return "Gm";
+    case WK_IMGVIEW:   return "Pv";
+    case WK_VIDEO:     return "Vp";
+    case WK_BROWSER:   return "Wb";
     default:           return "Mg";
     }
 }
@@ -2006,6 +2038,7 @@ static void menu_action(struct win *w, int m, int i) {
 
 enum {
     TL_PROGRAMS, TL_FILES, TL_NOTES, TL_CALC, TL_CANVAS, TL_SYSMON, TL_NETCENTER, TL_MINES,
+    TL_PICTURE, TL_VIDEO, TL_BROWSER,
     TL_TERMINAL, TL_SETTINGS, TL_REGISTRY, TL_DESKTOP, TL_CONSOLE, TL_LOGOUT, TL_RESTART, TL_SHUTDOWN, TL_APP
 };
 struct tile { char sym[3], name[32]; int kind; char cmd[48]; };
@@ -2038,6 +2071,9 @@ static void build_tiles(void) {
     add_tile("Nc", "Network Center", TL_NETCENTER, NULL);
     add_tile("Sm", "System Monitor", TL_SYSMON,    NULL);
     add_tile("Gm", "Mg Mines",       TL_MINES,     NULL);
+    add_tile("Pv", "Picture Viewer", TL_PICTURE,   NULL);
+    add_tile("Vp", "Video Player",   TL_VIDEO,     NULL);
+    add_tile("Wb", "Web Browser",    TL_BROWSER,   NULL);
     add_tile("Tm", "Terminal",       TL_TERMINAL,  NULL);
     add_tile("St", "Settings",       TL_SETTINGS,  NULL);
     add_tile("Rg", "Registry",       TL_REGISTRY,  NULL);
@@ -2087,6 +2123,9 @@ static void launch_tile(int ti) {
     case TL_SYSMON:    open_win(WK_SYSMON); desk_hidden = 0; break;
     case TL_NETCENTER: open_win(WK_NETCENTER); desk_hidden = 0; break;
     case TL_MINES:     open_win(WK_MINES); desk_hidden = 0; break;
+    case TL_PICTURE:   open_win(WK_IMGVIEW); desk_hidden = 0; break;
+    case TL_VIDEO:     open_win(WK_VIDEO); desk_hidden = 0; break;
+    case TL_BROWSER:   open_win(WK_BROWSER); desk_hidden = 0; break;
     case TL_TERMINAL:  open_win(WK_TERMINAL); desk_hidden = 0; break;
     case TL_SETTINGS:  open_win(WK_SETTINGS); desk_hidden = 0; break;
     case TL_REGISTRY:  open_win(WK_REGISTRY); desk_hidden = 0; break;
@@ -2198,6 +2237,9 @@ static const char *win_pin_key(int kind) {
     case WK_SYSMON:    return "sysmon";
     case WK_NETCENTER: return "netcenter";
     case WK_MINES:     return "mines";
+    case WK_IMGVIEW:   return "imgview";
+    case WK_VIDEO:     return "videoview";
+    case WK_BROWSER:   return "browser";
     default:           return "";
     }
 }
@@ -2312,8 +2354,48 @@ static inline uint32_t add_rgb_clamped(uint32_t base, uint32_t glow, int weight)
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
+/* Picture wallpaper: the file is decoded when its path changes, then cover-fitted
+ * (scaled to fill, centre-cropped) into wp_cache. Transparent pixels show the gradient. */
+static mg_image wp_pic;
+static char wp_pic_path[256];
+static void paint_picture(int W, int H) {
+    if (!wp_pic.px || !wp_cache) return;
+    double sx = (double)W / wp_pic.w, sy = (double)H / wp_pic.h;
+    double s = sx > sy ? sx : sy;
+    int tw = (int)(wp_pic.w * s + 0.5), th = (int)(wp_pic.h * s + 0.5);
+    if (tw < W) tw = W;
+    if (th < H) th = H;
+    mg_image sc = { 0, 0, NULL };
+    if (img_resample(&wp_pic, tw, th, &sc) != 0 || !sc.px) return;
+    int ox = (tw - W) / 2, oy = (th - H) / 2;
+    for (int y = 0; y < H; y++) {
+        const uint32_t *src = &sc.px[(size_t)(y + oy) * tw + ox];
+        uint32_t *dst = &wp_cache[y * W];
+        for (int x = 0; x < W; x++) {
+            uint32_t c = src[x];
+            unsigned a = c >> 24;
+            if (a == 255) { dst[x] = c & 0xFFFFFFu; continue; }
+            if (a == 0) continue;
+            uint32_t d = dst[x];
+            unsigned ia = 255 - a;
+            unsigned r = (((c >> 16) & 255) * a + ((d >> 16) & 255) * ia) / 255;
+            unsigned g = (((c >> 8) & 255) * a + ((d >> 8) & 255) * ia) / 255;
+            unsigned b = ((c & 255) * a + (d & 255) * ia) / 255;
+            dst[x] = (r << 16) | (g << 8) | b;
+        }
+    }
+    img_free(&sc);
+}
+
 static void rebuild_wallpaper_cache(int W, int H) {
     if (W <= 0 || H <= 0) return;
+    if (strcmp(wp_pic_path, cf.pic_path) != 0) {
+        snprintf(wp_pic_path, sizeof wp_pic_path, "%s", cf.pic_path);
+        img_free(&wp_pic);
+        char err[160];
+        if (cf.pic_path[0]) img_load_file(cf.pic_path, &wp_pic, err, sizeof err);
+        wp_w = 0;   /* force a rebuild below */
+    }
     if (wp_cache && wp_w == W && wp_h == H && wp_pat == cf.bgpat &&
         wp_top == cf.p.desk_top && wp_bot == cf.p.desk_bot && wp_acc == cf.acc)
         return;
@@ -2402,6 +2484,7 @@ static void rebuild_wallpaper_cache(int W, int H) {
             }
         }
     }
+    if (cf.bgpat == 6) paint_picture(W, H);
 }
 
 static void draw_wallpaper(void) {
@@ -2549,6 +2632,10 @@ static void dialog_ok(void) {
             int n = atoi(val); if (n < 0) n = 0; if (n > 30) n = 30; snprintf(val, sizeof val, "%d", n);
         }
         if (reg_set(pend_hive, pend_key, val) < 0) save_error("the setting");
+        load_cfg();
+        layout_desktop();
+        if (!strcmp(pend_key, "Display/CursorFile") && val[0] && !gfx_cursor_is_custom())
+            toast("Could not load that cursor image. Use PNG or BMP up to 64x64 px.");
         break;
     }
     case P_SET_TIME: {
@@ -3040,7 +3127,7 @@ int gui_run(void) {
         }
     }
 
-    int need_draw = 1;
+    int need_draw = 1, video_playing = 0;
     time_t last_sec = 0, last_hotplug = time(NULL);
 
     while (quit_code < 0) {
@@ -3068,6 +3155,12 @@ int gui_run(void) {
             } else if (r > 0) need_draw = 1;
         }
 
+        /* A playing video needs a redraw every frame (paced by gfx_present). */
+        video_playing = 0;
+        for (int i = 0; i < N(wins); i++)
+            if (wins[i].used && !wins[i].minimized && media_needs_tick(wins[i].kind)) video_playing = 1;
+        if (video_playing) need_draw = 1;
+
         if (need_draw) {
             render_desktop();
             gfx_present();
@@ -3083,7 +3176,7 @@ int gui_run(void) {
 
         int pty_ready = 0;
         struct gfx_mouse mev;
-        int k = gfx_poll_event(250, term.pty_fd, &pty_ready, &mev);
+        int k = gfx_poll_event(video_playing ? 16 : 250, term.pty_fd, &pty_ready, &mev);
         if (pty_ready) {
             int r = term_pump();
             if (r < 0) {

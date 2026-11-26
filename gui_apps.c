@@ -21,6 +21,7 @@
 #include <sys/sysinfo.h>
 #include <sys/utsname.h>
 #include "gui_apps.h"
+#include "imgcodec.h"
 #include "net.h"
 #include "cmds.h"
 
@@ -55,6 +56,9 @@ int apps_kind_from_name(const char *name, const char **sym_out, const char **lab
         { "sysmon",    WK_SYSMON,    "Sm", "System Monitor" },
         { "netcenter", WK_NETCENTER, "Nc", "Network Center" },
         { "mines",     WK_MINES,     "Gm", "Mg Mines" },
+        { "imgview",   WK_IMGVIEW,   "Pv", "Picture Viewer" },
+        { "videoview", WK_VIDEO,     "Vp", "Video Player" },
+        { "browser",   WK_BROWSER,   "Wb", "Web Browser" },
     };
     for (int i = 0; i < N(map); i++) {
         if (!strcasecmp(name, map[i].cmd)) {
@@ -154,6 +158,12 @@ static void files_open_selected(void) {
     if (wk > 0) {
         ui_open_app(wk, NULL);
         return;
+    }
+    /* Pictures and MPEG videos open in their viewers */
+    if (img_is_supported(it->name)) { ui_open_app(WK_IMGVIEW, full); return; }
+    {
+        const char *dot = strrchr(it->name, '.');
+        if (dot && (!strcasecmp(dot, ".mpg") || !strcasecmp(dot, ".mpeg"))) { ui_open_app(WK_VIDEO, full); return; }
     }
     if (it->is_exec) {
         ui_run_terminal_cmd(full);
@@ -1179,6 +1189,11 @@ void apps_init_window(int kind, const char *arg, char *title_out, int *def_w, in
             nc_fetch_url();
         }
         break;
+    case WK_IMGVIEW:
+    case WK_VIDEO:
+    case WK_BROWSER:
+        media_init_window(kind, arg, title_out, def_w, def_h);
+        break;
     case WK_MINES:
         snprintf(title_out, 40, "Mg Mines");
         *def_w = 460; *def_h = 390;
@@ -1192,6 +1207,10 @@ void apps_draw_window(int kind, int x, int y, int cw, int ch, int active) {
     struct ui_theme t;
     ui_get_theme(&t);
     switch (kind) {
+    case WK_IMGVIEW:
+    case WK_VIDEO:
+    case WK_BROWSER:
+        media_draw(kind, &t, x, y, cw, ch); break;
     case WK_FILES:     files_draw(&t, x, y, cw, ch); break;
     case WK_NOTES:     notes_draw(&t, x, y, cw, ch, active); break;
     case WK_CALC:      calc_draw(&t, x, y, cw, ch); break;
@@ -1203,6 +1222,7 @@ void apps_draw_window(int kind, int x, int y, int cw, int ch, int active) {
 }
 
 void apps_on_hotspot(int act, int a, int b, int mx, int my, int mouse_btn) {
+    if (act >= ACT_IMG_BTN && act <= ACT_WEB_ADDR) { media_hotspot(act, a, b); return; }
     switch (act) {
     case ACT_FILES_NAV: {
         static const char *const paths[6] = { "/programs", "~", "/data", "/etc", "/bin", "/" };
@@ -1367,6 +1387,7 @@ int apps_on_mouse_drag(int kind, int x, int y, int cw, int ch, const struct gfx_
 }
 
 void apps_on_wheel(int kind, int delta) {
+    if (kind == WK_IMGVIEW || kind == WK_BROWSER) { media_wheel(kind, delta); return; }
     if (kind == WK_FILES) { fm.scroll += delta * 2; if (fm.scroll < 0) fm.scroll = 0; }
     else if (kind == WK_NOTES) { nt.scroll += delta * 3; if (nt.scroll < 0) nt.scroll = 0; }
     else if (kind == WK_SYSMON) {
@@ -1376,6 +1397,7 @@ void apps_on_wheel(int kind, int delta) {
 }
 
 void apps_on_key(int kind, int k) {
+    if (kind == WK_IMGVIEW || kind == WK_VIDEO || kind == WK_BROWSER) { media_key(kind, k); return; }
     if (kind == WK_FILES) {
         if (fm.prompt_mode) {
             if (k == 27) { fm.prompt_mode = 0; return; }
@@ -1417,5 +1439,5 @@ void apps_on_key(int kind, int k) {
 }
 
 int apps_needs_tick(int kind) {
-    return kind == WK_SYSMON;
+    return kind == WK_SYSMON || media_needs_tick(kind);
 }

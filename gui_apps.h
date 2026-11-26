@@ -21,7 +21,10 @@ enum {
     WK_CANVAS    = 7,
     WK_SYSMON    = 8,
     WK_NETCENTER = 9,
-    WK_MINES     = 10
+    WK_MINES     = 10,
+    WK_IMGVIEW   = 11,   /* Picture Viewer (media_apps.c) */
+    WK_VIDEO     = 12,   /* Video Player (media_apps.c) */
+    WK_BROWSER   = 13    /* Web Browser (media_apps.c) */
 };
 
 /* Shared desktop theme snapshot passed from gui.c to gui_apps.c */
@@ -60,7 +63,11 @@ enum {
     ACT_NET_BTN    = 250,
     ACT_NET_URL    = 251,
     ACT_MINE_CELL  = 260,
-    ACT_MINE_BTN   = 261
+    ACT_MINE_BTN   = 261,
+    ACT_IMG_BTN    = 270,
+    ACT_VID_BTN    = 271,
+    ACT_WEB_BTN    = 272,
+    ACT_WEB_ADDR   = 273
 };
 
 void apps_init_window(int kind, const char *arg, char *title_out, int *def_w, int *def_h);
@@ -70,6 +77,15 @@ int  apps_on_mouse_drag(int kind, int x, int y, int cw, int ch, const struct gfx
 void apps_on_wheel(int kind, int delta);
 void apps_on_key(int kind, int k);
 int  apps_needs_tick(int kind);
+
+/* Picture Viewer, Video Player and Web Browser (media_apps.c) */
+void media_init_window(int kind, const char *arg, char *title_out, int *def_w, int *def_h);
+void media_draw(int kind, const struct ui_theme *t, int x, int y, int cw, int ch);
+void media_hotspot(int act, int a, int b);
+void media_key(int kind, int k);
+void media_wheel(int kind, int delta);
+int  media_needs_tick(int kind);
+void media_release(int kind);
 
 /* Map app command/name (e.g. "files", "/programs/calc") to WK_* or 0 */
 int  apps_kind_from_name(const char *name, const char **sym_out, const char **label_out);

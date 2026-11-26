@@ -213,7 +213,7 @@ cd ..
 # 2) initramfs: our programs only, statically linked (no libraries in the OS)
 gcc -static -O2 -o ../init \
   ../boot.c ../shell.c ../users.c ../line.c ../cmds.c \
-  ../editor.c ../registry.c ../gfx.c ../gui.c ../gui_apps.c ../net.c -lcrypt
+  ../editor.c ../registry.c ../gfx.c ../gui.c ../gui_apps.c ../media_apps.c ../imgcodec.c ../net.c -lcrypt -lm
 
 rm -rf rootfs && mkdir rootfs
 cp ../init rootfs/init
@@ -223,7 +223,7 @@ chmod 755 rootfs/init
 # from any shell (PATH includes /programs), and open native VaporGlass desktop
 # windows when launched from inside the graphical desktop.
 mkdir -p rootfs/programs
-for app in files notes calc canvas sysmon netcenter mines; do
+for app in files notes calc canvas sysmon netcenter mines imgview videoview browser; do
   gcc -static -O2 -o "rootfs/programs/$app" "../programs/$app.c"
   chmod 755 "rootfs/programs/$app"
 done

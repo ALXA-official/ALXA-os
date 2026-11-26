@@ -104,6 +104,12 @@ void gfx_glass_panel(int x, int y, int w, int h, int r, uint32_t tint_rgb,
                      int alpha, int blur_r, uint32_t rim_rgb, int sheen);
 void gfx_shadow(int x, int y, int w, int h, int r);
 void gfx_gradient_v(int x, int y, int w, int h, uint32_t top_rgb, uint32_t bot_rgb);
+/* Pixel blits (clipped). src is row-major with src_stride pixels per row.
+ * gfx_blit copies, gfx_blit_alpha blends per-pixel alpha, gfx_blit_scaled
+ * stretches a sw x sh image to dw x dh with nearest-neighbour sampling. */
+void gfx_blit(int x, int y, int w, int h, const uint32_t *src, int src_stride);
+void gfx_blit_alpha(int x, int y, int w, int h, const uint32_t *src, int src_stride);
+void gfx_blit_scaled(int x, int y, int dw, int dh, const uint32_t *src, int sw, int sh);
 
 /* Text rendering (scale=1: 8x16 crisp font; scale=2: 16x32 display header font) */
 int gfx_char_w(int scale);
@@ -118,6 +124,14 @@ void gfx_present(void);
 /* Poll keyboard, mouse, tablet, and optional extra fd (e.g. PTY master). */
 int gfx_poll_event(int timeout_ms, int extra_fd, int *extra_ready, struct gfx_mouse *mev);
 void gfx_get_cursor(int *x, int *y);
+/* Custom pointer: ARGB image up to 64x64 with the click point at (hot_x, hot_y).
+ * argb == NULL restores the built-in arrow. Returns 0, or -1 if the image is too big. */
+int  gfx_cursor_set(const uint32_t *argb, int w, int h, int hot_x, int hot_y);
+int  gfx_cursor_is_custom(void);
+/* Refresh rate target (24..240 Hz): selects the matching display mode when the
+ * hardware has one, and caps presentation to that rate. */
+int  gfx_set_refresh(int hz);
+int  gfx_get_refresh(void);
 
 /* Shell diagnostic command: `display` / `gpu` */
 int cmd_display(int argc, char **argv);

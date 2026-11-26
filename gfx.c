@@ -230,9 +230,10 @@ static int drm_ioctl(int fd, unsigned long req, void *arg) {
 
 /* ---------- Cursor sprite (20x20 crisp arrow with dark outline) ---------- */
 
-#define CUR_W 16
-#define CUR_H 22
-static const char *const cursor_art[CUR_H] = {
+#define ART_W 16
+#define ART_H 22
+#define CUR_MAX 64   /* largest custom pointer image (hardware cursor limit) */
+static const char *const cursor_art[ART_H] = {
     "X...............",
     "XX..............",
     "X.X.............",
@@ -257,19 +258,46 @@ static const char *const cursor_art[CUR_H] = {
     "................"
 };
 /* 'X' = dark outline (0xFF0A0E17), '.' inside arrow = white fill (0xFFFFFFFF), '.' outside = transparent */
-static uint32_t cursor_argb[CUR_W * CUR_H];
+static uint32_t cursor_argb[CUR_MAX * CUR_MAX];   /* live sprite, cur_w x cur_h */
 static int cursor_ready;
+static int cur_w = ART_W, cur_h = ART_H;   /* sprite size */
+static int cur_hx = 0, cur_hy = 0;         /* hotspot inside the sprite */
+static int cur_custom = 0;                 /* 1 when a user image is loaded */
+
+/* Refresh pacing: the requested refresh rate (Hz). gfx_present() never
+ * presents more often than this, and the desktop runs at the matching mode. */
+static int pref_hz = 60;
+static long long pace_us = 1000000 / 60;
+static long long last_present_us = 0;
+static int present_pending = 0;
+
+static long long mono_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+}
+
+/* Pick the mode with the same resolution whose refresh rate is closest to hz. */
+static int closest_hz_index(const struct gfx_mode *modes, int n, int w, int h, int hz) {
+    int best = -1, bd = 1 << 30;
+    for (int i = 0; i < n; i++) {
+        if (modes[i].w != w || modes[i].h != h) continue;
+        int d = modes[i].hz > hz ? modes[i].hz - hz : hz - modes[i].hz;
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
 
 static void init_cursor_pixels(void) {
     if (cursor_ready) return;
-    for (int y = 0; y < CUR_H; y++) {
+    for (int y = 0; y < ART_H; y++) {
         int inside = 0;
         /* Count spans per row: '.' between 'X' boundaries on the arrow body/stem are white */
         const char *row = cursor_art[y];
         int first_x = -1, last_x = -1;
-        for (int x = 0; x < CUR_W; x++) if (row[x] == 'X') { if (first_x < 0) first_x = x; last_x = x; }
+        for (int x = 0; x < ART_W; x++) if (row[x] == 'X') { if (first_x < 0) first_x = x; last_x = x; }
         (void)inside;
-        for (int x = 0; x < CUR_W; x++) {
+        for (int x = 0; x < ART_W; x++) {
             uint32_t px = 0;
             if (row[x] == 'X') px = 0xFF0B101B;
             else if (y <= 12 && first_x >= 0 && x > first_x && x < last_x) px = 0xFFFFFFFF;
@@ -280,11 +308,14 @@ static void init_cursor_pixels(void) {
             else if (y == 17 && (x > 6 && x < 9)) px = 0xFFFFFFFF;
             else if (y == 18 && (x > 6 && x < 10)) px = 0xFFFFFFFF;
             else if (y == 19 && (x > 7 && x < 10)) px = 0xFFFFFFFF;
-            cursor_argb[y * CUR_W + x] = px;
+            cursor_argb[y * ART_W + x] = px;
         }
     }
+    cur_w = ART_W; cur_h = ART_H; cur_hx = cur_hy = 0; cur_custom = 0;
     cursor_ready = 1;
 }
+
+
 
 /* ---------- Display state ---------- */
 
@@ -354,6 +385,43 @@ static struct {
     time_t last_ev_scan;
     int mod_shift, mod_ctrl, mod_alt, mod_caps;
 } G;
+
+/* Replace the pointer with an ARGB image (<= 64x64, hot_x/hot_y = click point).
+ * Call with argb == NULL to restore the built-in arrow. Returns 0 or -1. */
+static void hw_cursor_destroy(void);
+static int  hw_cursor_init(void);
+int gfx_cursor_set(const uint32_t *argb, int w, int h, int hot_x, int hot_y) {
+    if (!argb) {
+        cursor_ready = 0;
+        init_cursor_pixels();
+    } else {
+        if (w <= 0 || h <= 0 || w > CUR_MAX || h > CUR_MAX) return -1;
+        if (hot_x < 0 || hot_y < 0 || hot_x >= w || hot_y >= h) { hot_x = 0; hot_y = 0; }
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) cursor_argb[y * w + x] = argb[y * w + x];
+        cur_w = w; cur_h = h; cur_hx = hot_x; cur_hy = hot_y; cur_custom = 1;
+        cursor_ready = 1;
+    }
+    if (G.open && G.drm_fd >= 0 && G.info.backend == GFX_GPU_DRIVER) {
+        hw_cursor_destroy();
+        hw_cursor_init();   /* falls back to the software cursor if the GPU refuses */
+    }
+    if (G.open) gfx_mark_all_dirty();
+    return 0;
+}
+int gfx_cursor_is_custom(void) { return cur_custom; }
+
+/* Set the target refresh rate (24..240 Hz). Switches the display to the
+ * matching mode when the hardware offers one at the current resolution. */
+int gfx_set_refresh(int hz) {
+    if (hz < 24) hz = 24;
+    if (hz > 240) hz = 240;
+    pref_hz = hz;
+    pace_us = 1000000LL / hz;
+    if (!G.open || G.test_ppm[0] || G.drm_fd < 0 || !G.info.modeset) return 0;
+    return gfx_set_resolution(G.W, G.H);
+}
+int gfx_get_refresh(void) { return pref_hz; }
 
 static int is_firmware_driver_name(const char *name) {
     static const char *const fw[] = {
@@ -621,13 +689,13 @@ static int hw_cursor_init(void) {
     }
     memset(map, 0, (size_t)creq.size);
     uint32_t stride_px = creq.pitch / 4;
-    for (int y = 0; y < CUR_H && (uint32_t)y < ch; y++)
-        for (int x = 0; x < CUR_W && (uint32_t)x < cw; x++)
-            map[y * stride_px + x] = cursor_argb[y * CUR_W + x];
+    for (int y = 0; y < cur_h && (uint32_t)y < ch; y++)
+        for (int x = 0; x < cur_w && (uint32_t)x < cw; x++)
+            map[y * stride_px + x] = cursor_argb[y * cur_w + x];
 
     struct mg_drm_mode_cursor cur = {
         MG_DRM_MODE_CURSOR_BO | MG_DRM_MODE_CURSOR_MOVE,
-        G.crtc_id, G.cur_x, G.cur_y, cw, ch, creq.handle
+        G.crtc_id, G.cur_x - cur_hx, G.cur_y - cur_hy, cw, ch, creq.handle
     };
     if (drm_ioctl(G.drm_fd, MG_DRM_IOCTL_MODE_CURSOR, &cur) < 0) {
         munmap(map, (size_t)creq.size);
@@ -648,7 +716,7 @@ static int hw_cursor_init(void) {
 static void hw_cursor_move(int x, int y) {
     if (!G.info.hw_cursor || G.drm_fd < 0) return;
     struct mg_drm_mode_cursor cur = {
-        MG_DRM_MODE_CURSOR_MOVE, G.crtc_id, x, y, G.cur_bo_w, G.cur_bo_h, 0
+        MG_DRM_MODE_CURSOR_MOVE, G.crtc_id, x - cur_hx, y - cur_hy, G.cur_bo_w, G.cur_bo_h, 0
     };
     if (drm_ioctl(G.drm_fd, MG_DRM_IOCTL_MODE_CURSOR, &cur) < 0) {
         hw_cursor_destroy();
@@ -1046,10 +1114,7 @@ int gfx_open(int pref_w, int pref_h) {
                     G.has_saved_crtc = 1;
 
                 int pick = -1;
-                if (pref_w > 0 && pref_h > 0) {
-                    for (int k = 0; k < nm; k++)
-                        if (gmodes[k].w == pref_w && gmodes[k].h == pref_h) { pick = k; break; }
-                }
+                if (pref_w > 0 && pref_h > 0) pick = closest_hz_index(gmodes, nm, pref_w, pref_h, pref_hz);
                 if (pick < 0) {
                     for (int k = 0; k < nm; k++)
                         if (gmodes[k].preferred) { pick = k; break; }
@@ -1194,11 +1259,11 @@ int gfx_set_resolution(int w, int h) {
             if (G.info.modes[i].preferred) { pick = i; break; }
         if (pick < 0) pick = 0;
     } else {
-        for (int i = 0; i < G.info.nmodes; i++)
-            if (G.info.modes[i].w == w && G.info.modes[i].h == h) { pick = i; break; }
+        pick = closest_hz_index(G.info.modes, G.info.nmodes, w, h, pref_hz);
     }
     if (pick < 0) return -1;
-    if (G.info.modes[pick].w == G.W && G.info.modes[pick].h == G.H) return 0;
+    if (G.info.modes[pick].w == G.W && G.info.modes[pick].h == G.H && G.info.modes[pick].hz == G.info.hz)
+        return 0;
     return apply_kms_mode(pick);
 }
 
@@ -1260,6 +1325,63 @@ void gfx_put(int x, int y, uint32_t rgb) {
     if (x < G.clx0 || x >= G.clx1 || y < G.cly0 || y >= G.cly1) return;
     G.comp[y * G.W + x] = rgb;
     mark_dirty(x, y, x + 1, y + 1);
+}
+
+/* Copy a block of 0x00RRGGBB (or 0xAARRGGBB, alpha ignored) pixels, clipped. */
+void gfx_blit(int x, int y, int w, int h, const uint32_t *src, int src_stride) {
+    if (!src || w <= 0 || h <= 0) return;
+    int x0 = x < G.clx0 ? G.clx0 : x, y0 = y < G.cly0 ? G.cly0 : y;
+    int x1 = x + w > G.clx1 ? G.clx1 : x + w, y1 = y + h > G.cly1 ? G.cly1 : y + h;
+    if (x0 >= x1 || y0 >= y1) return;
+    for (int j = y0; j < y1; j++) {
+        const uint32_t *sp = src + (size_t)(j - y) * src_stride + (x0 - x);
+        uint32_t *dp = &G.comp[j * G.W + x0];
+        for (int i = 0; i < x1 - x0; i++) dp[i] = sp[i] & 0x00FFFFFFu;
+    }
+    mark_dirty(x0, y0, x1, y1);
+}
+
+/* Same as gfx_blit but honours the source alpha (0..255 per pixel). */
+void gfx_blit_alpha(int x, int y, int w, int h, const uint32_t *src, int src_stride) {
+    if (!src || w <= 0 || h <= 0) return;
+    int x0 = x < G.clx0 ? G.clx0 : x, y0 = y < G.cly0 ? G.cly0 : y;
+    int x1 = x + w > G.clx1 ? G.clx1 : x + w, y1 = y + h > G.cly1 ? G.cly1 : y + h;
+    if (x0 >= x1 || y0 >= y1) return;
+    for (int j = y0; j < y1; j++) {
+        const uint32_t *sp = src + (size_t)(j - y) * src_stride + (x0 - x);
+        uint32_t *dp = &G.comp[j * G.W + x0];
+        for (int i = 0; i < x1 - x0; i++) {
+            uint32_t c = sp[i];
+            unsigned a = c >> 24;
+            if (a == 255) { dp[i] = c & 0x00FFFFFFu; continue; }
+            if (a == 0) continue;
+            uint32_t d = dp[i];
+            unsigned ia = 255 - a;
+            unsigned r = (((c >> 16) & 255) * a + ((d >> 16) & 255) * ia) / 255;
+            unsigned g = (((c >> 8) & 255) * a + ((d >> 8) & 255) * ia) / 255;
+            unsigned b = ((c & 255) * a + (d & 255) * ia) / 255;
+            dp[i] = (r << 16) | (g << 8) | b;
+        }
+    }
+    mark_dirty(x0, y0, x1, y1);
+}
+
+/* Scale a source image (sw x sh) into the rectangle dw x dh (nearest neighbour). */
+void gfx_blit_scaled(int x, int y, int dw, int dh, const uint32_t *src, int sw, int sh) {
+    if (!src || dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
+    int x0 = x < G.clx0 ? G.clx0 : x, y0 = y < G.cly0 ? G.cly0 : y;
+    int x1 = x + dw > G.clx1 ? G.clx1 : x + dw, y1 = y + dh > G.cly1 ? G.cly1 : y + dh;
+    if (x0 >= x1 || y0 >= y1) return;
+    for (int j = y0; j < y1; j++) {
+        long long sy = (long long)(j - y) * sh / dh;
+        const uint32_t *srow = src + sy * sw;
+        uint32_t *dp = &G.comp[j * G.W + x0];
+        for (int i = x0; i < x1; i++) {
+            long long sx = (long long)(i - x) * sw / dw;
+            *dp++ = srow[sx] & 0x00FFFFFFu;
+        }
+    }
+    mark_dirty(x0, y0, x1, y1);
 }
 
 void gfx_rect(int x, int y, int w, int h, uint32_t rgb) {
@@ -1890,7 +2012,7 @@ static void blit_region_to_target(uint8_t *dst_base, uint32_t dst_pitch, int is_
     for (int y = y0; y < y1; y++) {
         const uint32_t *src = &G.comp[y * G.W + x0];
         uint8_t *drow = dst_base + (size_t)y * dst_pitch;
-        int cur_row = draw_sw_cursor && y >= G.cur_y && y < G.cur_y + CUR_H;
+        int cur_row = draw_sw_cursor && y >= (G.cur_y - cur_hy) && y < (G.cur_y - cur_hy) + cur_h;
 
         if (std_xrgb && !cur_row) {
             memcpy(drow + (size_t)x0 * 4, src, (size_t)(x1 - x0) * 4);
@@ -1898,8 +2020,8 @@ static void blit_region_to_target(uint8_t *dst_base, uint32_t dst_pitch, int is_
         }
         for (int x = x0; x < x1; x++) {
             uint32_t px = G.comp[y * G.W + x];
-            if (cur_row && x >= G.cur_x && x < G.cur_x + CUR_W) {
-                uint32_t cpx = cursor_argb[(y - G.cur_y) * CUR_W + (x - G.cur_x)];
+            if (cur_row && x >= (G.cur_x - cur_hx) && x < (G.cur_x - cur_hx) + cur_w) {
+                uint32_t cpx = cursor_argb[(y - (G.cur_y - cur_hy)) * cur_w + (x - (G.cur_x - cur_hx))];
                 if (cpx >> 24) px = cpx & 0xFFFFFFu;
             }
             if (std_xrgb) {
@@ -1927,8 +2049,8 @@ static void write_test_ppm(void) {
         for (int y = 0; y < G.H; y++) {
             for (int x = 0; x < G.W; x++) {
                 uint32_t px = G.comp[y * G.W + x];
-                if (y >= G.cur_y && y < G.cur_y + CUR_H && x >= G.cur_x && x < G.cur_x + CUR_W) {
-                    uint32_t cpx = cursor_argb[(y - G.cur_y) * CUR_W + (x - G.cur_x)];
+                if (y >= (G.cur_y - cur_hy) && y < (G.cur_y - cur_hy) + cur_h && x >= (G.cur_x - cur_hx) && x < (G.cur_x - cur_hx) + cur_w) {
+                    uint32_t cpx = cursor_argb[(y - (G.cur_y - cur_hy)) * cur_w + (x - (G.cur_x - cur_hx))];
                     if (cpx >> 24) px = cpx & 0xFFFFFFu;
                 }
                 row[x * 3 + 0] = (uint8_t)((px >> 16) & 255);
@@ -1944,15 +2066,20 @@ static void write_test_ppm(void) {
 
 void gfx_present(void) {
     if (!G.open) return;
+    /* Frame limiter: present at most once per refresh interval. */
+    long long now_us = mono_us();
+    if (now_us - last_present_us < pace_us) { present_pending = 1; return; }
+    last_present_us = now_us;
+    present_pending = 0;
 
     int sw_cur = !G.info.hw_cursor;
     if (sw_cur) {
-        if (!G.sw_cur_drawn || G.sw_cur_x != G.cur_x || G.sw_cur_y != G.cur_y) {
+        if (!G.sw_cur_drawn || G.sw_cur_x != G.cur_x - cur_hx || G.sw_cur_y != G.cur_y - cur_hy) {
             if (G.sw_cur_drawn)
-                mark_dirty(G.sw_cur_x, G.sw_cur_y, G.sw_cur_x + CUR_W, G.sw_cur_y + CUR_H);
-            mark_dirty(G.cur_x, G.cur_y, G.cur_x + CUR_W, G.cur_y + CUR_H);
-            G.sw_cur_x = G.cur_x;
-            G.sw_cur_y = G.cur_y;
+                mark_dirty(G.sw_cur_x, G.sw_cur_y, G.sw_cur_x + cur_w, G.sw_cur_y + cur_h);
+            mark_dirty(G.cur_x - cur_hx, G.cur_y - cur_hy, G.cur_x - cur_hx + cur_w, G.cur_y - cur_hy + cur_h);
+            G.sw_cur_x = G.cur_x - cur_hx;
+            G.sw_cur_y = G.cur_y - cur_hy;
             G.sw_cur_drawn = 1;
         }
     }
@@ -2077,6 +2204,17 @@ static int read_tty_escape(void) {
 int gfx_poll_event(int timeout_ms, int extra_fd, int *extra_ready, struct gfx_mouse *mev) {
     if (extra_ready) *extra_ready = 0;
     if (!G.test_ppm[0]) ev_scan();
+    /* A frame held back by the refresh limiter goes out as soon as its slot
+     * arrives, even if nothing else wakes the loop. */
+    if (present_pending) {
+        long long wait_us = pace_us - (mono_us() - last_present_us);
+        if (wait_us <= 0) {
+            gfx_present();
+        } else {
+            long long wait_ms = (wait_us + 999) / 1000;
+            if (timeout_ms < 0 || timeout_ms > wait_ms) timeout_ms = (int)wait_ms;
+        }
+    }
 
     struct pollfd pfds[20];
     int nfds = 0, tty_slot = -1, extra_slot = -1;
