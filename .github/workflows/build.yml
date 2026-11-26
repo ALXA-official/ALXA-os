@@ -29,6 +29,7 @@ jobs:
           timeout 20 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
             -append "vga=792 nomodeset console=ttyS0 console=tty0" \
             -vga std -display none -serial file:boot-basic.log -m 256M \
+            -nic user,model=virtio-net-pci \
             -drive file=disk.img,if=virtio,format=raw || true
           cat boot-basic.log
           grep -q "Magnesium OS.*Basic-Display.*driver=simpledrm" boot-basic.log
@@ -39,9 +40,19 @@ jobs:
             -append "console=ttyS0 console=tty0" \
             -vga none -device virtio-gpu-pci,xres=1280,yres=800 \
             -display none -serial file:boot-gpu.log -m 256M \
+            -nic user,model=virtio-net-pci \
             -drive file=disk.img,if=virtio,format=raw || true
           cat boot-gpu.log
           grep -q "Magnesium OS.*GPU-KMS.*driver=virtio_gpu" boot-gpu.log
+
+      - name: Networking + /programs test (NIC, DHCP, DNS, built-in apps)
+        run: |
+          chmod +x tests/net-test.sh
+          ./tests/net-test.sh
+          cat boot-net.log
+          grep -q "virtio_net" boot-net.log
+          grep -q "10.0.2.15" boot-net.log
+          grep -q "netcenter" boot-net.log
 
       - name: Full system test (accounts, permissions, saving to disk)
         continue-on-error: true

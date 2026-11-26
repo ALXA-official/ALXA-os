@@ -15,6 +15,7 @@ vm_start() {          # vm_start LOGFILE
   exec 3<>vm.in       # keep the pipe open so QEMU never sees end-of-input
   timeout 300 qemu-system-x86_64 -kernel bzImage -initrd initramfs.gz \
     -append "console=ttyS0" -nographic -m 128M -no-reboot \
+    -nic user,model=virtio-net-pci \
     -drive file=test-disk.img,if=virtio,format=raw < vm.in > "$LOG" 2>&1 &
   QPID=$!
 }

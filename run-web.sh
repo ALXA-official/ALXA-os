@@ -77,6 +77,10 @@ echo "  (Display mode: GPU=${GPU} | Press Ctrl+C here to stop)"
 echo "================================================================"
 echo ""
 
+# User-mode (SLIRP) networking: a virtio-net NIC with DHCP/DNS served by QEMU,
+# so `dhcp`, `ping`, `dns` and `fetch` work out of the box in the shell.
+NIC=(-nic user,model=virtio-net-pci)
+
 DISK=()
 [ -f disk.img ] && DISK=(-drive file=disk.img,if=virtio,format=raw)
 
@@ -89,14 +93,14 @@ case "$GPU" in
       -kernel bzImage -initrd initramfs.gz \
       -append "vga=792 nomodeset console=ttyS0 console=tty0" \
       -vga std -usb -device usb-tablet \
-      -vnc "127.0.0.1:${VNC_DISPLAY}" -serial stdio "${DISK[@]}"
+      -vnc "127.0.0.1:${VNC_DISPLAY}" -serial stdio "${NIC[@]}" "${DISK[@]}"
     ;;
   std|bochs)
     exec qemu-system-x86_64 "${KVM[@]}" -smp 2 -m "$MEM" \
       -kernel bzImage -initrd initramfs.gz \
       -append "console=ttyS0 console=tty0" \
       -vga std -usb -device usb-tablet \
-      -vnc "127.0.0.1:${VNC_DISPLAY}" -serial stdio "${DISK[@]}"
+      -vnc "127.0.0.1:${VNC_DISPLAY}" -serial stdio "${NIC[@]}" "${DISK[@]}"
     ;;
   virtio|*)
     exec qemu-system-x86_64 "${KVM[@]}" -smp 2 -m "$MEM" \
@@ -104,6 +108,6 @@ case "$GPU" in
       -append "console=ttyS0 console=tty0" \
       -vga none -device virtio-gpu-pci,xres=1280,yres=800 \
       -usb -device usb-tablet \
-      -vnc "127.0.0.1:${VNC_DISPLAY}" -serial stdio "${DISK[@]}"
+      -vnc "127.0.0.1:${VNC_DISPLAY}" -serial stdio "${NIC[@]}" "${DISK[@]}"
     ;;
 esac

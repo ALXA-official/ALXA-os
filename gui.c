@@ -1,6 +1,7 @@
 /*
- * Magnesium OS - pixel-graphics desktop, Start menu, Settings, Registry
- * Editor, windowed PTY Terminal, first-start setup, and login screen.
+ * Magnesium OS - VaporGlass pixel desktop, smooth anti-aliased UI, themes,
+ * manual customization, network & hardware driver panels, Start menu,
+ * Registry Editor, windowed PTY Terminal, built-in /programs apps, and login.
  *
  * Works identically on native DRM/KMS GPU drivers (hardware modesetting,
  * double-buffered VSync page-flipping, hardware cursor) and on firmware
@@ -31,7 +32,9 @@
 #include <sys/wait.h>
 #include <sys/reboot.h>
 #include "gui.h"
+#include "gui_apps.h"
 #include "gfx.h"
+#include "net.h"
 #include "registry.h"
 #include "users.h"
 #include "cmds.h"
@@ -40,39 +43,100 @@
 
 #define N(a)   ((int)(sizeof(a) / sizeof((a)[0])))
 #define CK(c)  ((c) & 0x1F)
-#define MAXHOT 1500
-#define BAR_H  38
-#define TITLE_H 32
+#define MAXHOT 2048
+#define BAR_H   40
+#define TITLE_H 34
 #define MENU_H  26
+#define MAXWINS 10
 
-/* ================= Theme & Settings ================= */
+/* ================= Themes, VaporGlass & Manual Overrides ================= */
 
 struct pal {
     uint32_t desk_top, desk_bot, bar, barfg, win, win_alt, winfg;
     uint32_t titleoff, titlefgoff, border, muted, sel, input_bg, ok, bad;
+    uint32_t def_acc;
 };
 
-static const struct pal pals[3] = {
-    /* Dark */
-    { 0x0A1324, 0x132342, 0x0E1626, 0xDCE7F7, 0x141E31, 0x19253C, 0xE6EEF9,
-      0x1D2A44, 0x9FB0CC, 0x2F4163, 0x7F92B2, 0x223558, 0x0D1524, 0x4CD08A, 0xF06565 },
-    /* Light */
-    { 0xD6E4F7, 0xBFD3EE, 0xF3F6FC, 0x1A2538, 0xFFFFFF, 0xF4F7FC, 0x1B2638,
-      0xE5ECF7, 0x4E5D7A, 0xB5C4DD, 0x677692, 0xDAE6FA, 0xEEF3FA, 0x1B9E5B, 0xD94848 },
-    /* Ember */
-    { 0x180E09, 0x2C1810, 0x1A100B, 0xF4DFCF, 0x22150F, 0x2B1B13, 0xF7E8DC,
-      0x332018, 0xC8A790, 0x5E3E2F, 0x9E8170, 0x472C20, 0x160D09, 0x7BD88F, 0xFF7A6B },
+#define THEME_LIST  "Magnesium|Frost|Aurora|Obsidian|Ember|Cobalt|Sakura|Classic"
+#define ACCENT_LIST "Sky|Orange|Cyan|Emerald|Violet|Gold|Crimson|Mint"
+#define BG_LIST     "Aurora|Gradient|Nebula|Prism|Grid|Solid"
+#define GLASS_LIST  "VaporGlass|Frosted|Clear|Solid"
+#define BLUR_LIST   "Off|Low|Medium|High"
+#define FONT_LIST   "Smooth|Subpixel|Crisp"
+
+static const struct pal pals[8] = {
+    /* 0: Magnesium (Signature deep slate-cobalt mineral glass) */
+    { 0x071124, 0x132B4C, 0x0C1629, 0xE2ECF9, 0x111D33, 0x172642, 0xEAF2FC,
+      0x1B2B48, 0x9FB3D1, 0x334B73, 0x8499BA, 0x22385E, 0x0B1322, 0x34D399, 0xF06565, 0x38BDF8 },
+    /* 1: Frost (Arctic bright silver-ice crystal glass) */
+    { 0xCFE2F7, 0x9EC0E6, 0xEEF4FC, 0x142033, 0xF7FAFF, 0xEBF1FA, 0x162235,
+      0xDDE7F5, 0x4B5C78, 0xA8BBD8, 0x5E708E, 0xD2E3FA, 0xE6EEF9, 0x159957, 0xDC4C4C, 0x0284C7 },
+    /* 2: Aurora (Northern-lights emerald & deep midnight teal) */
+    { 0x051923, 0x0B3842, 0x081E28, 0xDCF7F2, 0x0C2530, 0x123240, 0xE6FAF6,
+      0x163B4A, 0x92BDB8, 0x285E6E, 0x7BA8A3, 0x1B4A5B, 0x071820, 0x34D399, 0xF87171, 0x2DD4BF },
+    /* 3: Obsidian (Ultra-dark carbon studio + luminous rim) */
+    { 0x05070B, 0x101521, 0x090C12, 0xE5E9F2, 0x0E121B, 0x141A26, 0xECEFF6,
+      0x1A2130, 0x8E9BB2, 0x2B364D, 0x77839B, 0x1F293D, 0x080B10, 0x4ADE80, 0xF87171, 0x60A5FA },
+    /* 4: Ember (Volcanic warm copper & obsidian bronze) */
+    { 0x1A0D08, 0x361A10, 0x1C0F0A, 0xF7E4D4, 0x24140E, 0x2E1B13, 0xF9ECE1,
+      0x382118, 0xCCA892, 0x664232, 0xA48573, 0x4B2D20, 0x150B08, 0x6EE7B7, 0xFB7185, 0xFB923C },
+    /* 5: Cobalt (Royal sapphire studio) */
+    { 0x081438, 0x162F6E, 0x0C1A42, 0xE4ECFF, 0x102252, 0x162C66, 0xEDF2FF,
+      0x1E377A, 0xA3B8E8, 0x3A58A6, 0x89A0D6, 0x254494, 0x0A1638, 0x34D399, 0xF87171, 0x60A5FA },
+    /* 6: Sakura (Twilight plum & rose-quartz glass) */
+    { 0x1C0E24, 0x381B3F, 0x1F1028, 0xF7E6F5, 0x281533, 0x331C40, 0xFAF0F9,
+      0x3E234D, 0xCFA8CA, 0x6B3E7A, 0xAD86AA, 0x512D63, 0x180C20, 0x4ADE80, 0xFB7185, 0xF472B6 },
+    /* 7: Classic (Crisp opaque flat workstation) */
+    { 0x1B2838, 0x243447, 0x131B26, 0xE2E8F0, 0x1E293B, 0x263449, 0xF1F5F9,
+      0x334155, 0x94A3B8, 0x475569, 0x94A3B8, 0x334155, 0x0F172A, 0x22C55E, 0xEF4444, 0x38BDF8 },
 };
-static const uint32_t accents[6] = { 0x5EB8FF, 0xFF8A3D, 0x2CC9DC, 0x46C97A, 0xC77DFF, 0xF2B632 };
+
+static const uint32_t accents[8] = {
+    0x38BDF8, 0xFB923C, 0x22D3EE, 0x34D399, 0xC084FC, 0xFBBF24, 0xF43F5E, 0x2DD4BF
+};
 
 struct cfg {
     struct pal p;
     uint32_t acc, accfg;
-    int bgpat, top, clock, h12, secs, date, controls, labels, offset;
+    int theme_idx;
+    int glass_mode;          /* 0=VaporGlass, 1=Frosted, 2=Clear, 3=Solid */
+    int glass_alpha;         /* 0..255 */
+    int blur_r;              /* 0..12 */
+    int sheen;               /* 0..40 */
+    int radius;              /* 0..16 */
+    int font_mode;           /* GFX_FONT_SMOOTH / SUBPIXEL / CRISP */
+    int bgpat;               /* 0=Aurora, 1=Gradient, 2=Nebula, 3=Prism, 4=Grid, 5=Solid */
+    int desk_icons;          /* 1 = show desktop shortcut tiles */
+    int floating_bar;        /* 1 = floating VaporGlass dock */
+    int top, clock, h12, secs, date, controls, labels, offset;
     int reqW, reqH;
     char pinned[256];
 };
 static struct cfg cf;
+
+/* Cached static wallpaper buffer so complex Aurora/Nebula/Prism art draws in <0.4ms */
+static uint32_t *wp_cache;
+static int wp_w, wp_h, wp_pat;
+static uint32_t wp_top, wp_bot, wp_acc;
+
+static int parse_hex_rgb(const char *s, uint32_t *out) {
+    if (!s) return 0;
+    while (*s == ' ' || *s == '\t') s++;
+    if (*s == '#') s++;
+    else if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    if (strlen(s) < 6) return 0;
+    uint32_t v = 0;
+    for (int i = 0; i < 6; i++) {
+        char c = s[i];
+        int d = (c >= '0' && c <= '9') ? (c - '0') :
+                (c >= 'a' && c <= 'f') ? (c - 'a' + 10) :
+                (c >= 'A' && c <= 'F') ? (c - 'A' + 10) : -1;
+        if (d < 0) return 0;
+        v = (v << 4) | (uint32_t)d;
+    }
+    *out = v;
+    return 1;
+}
 
 static int opt_index(const char *opts, const char *val) {
     if (!opts || !val) return -1;
@@ -125,13 +189,59 @@ static void rebuild_res_opts(void) {
 
 static void load_cfg(void) {
     reg_refresh();
-    int t = opt_index("Dark|Light|Ember", reg_eff("Display/Theme", "Dark")); if (t < 0) t = 0;
-    int a = opt_index("Flame|Orange|Cyan|Green|Magenta|Gold", reg_eff("Display/Accent", "Flame")); if (a < 0) a = 0;
+    const char *tname = reg_eff("Display/Theme", "Magnesium");
+    int t = opt_index(THEME_LIST, tname);
+    if (t < 0) {
+        if (!strcasecmp(tname, "Dark")) t = 0;
+        else if (!strcasecmp(tname, "Light")) t = 1;
+        else t = 0;
+    }
+    cf.theme_idx = t;
     cf.p = pals[t];
-    cf.acc = accents[a];
-    cf.accfg = lum(cf.acc) > 145 ? 0x0E1522 : 0xFFFFFF;
-    int b = opt_index("Gradient|Dots|Grid|Solid", reg_eff("Desktop/Background", "Gradient"));
+
+    const char *aname = reg_eff("Display/Accent", "Sky");
+    int a = opt_index(ACCENT_LIST, aname);
+    if (a < 0 && !strcasecmp(aname, "Flame")) a = 0;
+    cf.acc = (a >= 0) ? accents[a] : cf.p.def_acc;
+
+    /* Manual #RRGGBB hex overrides */
+    uint32_t hex_c;
+    if (parse_hex_rgb(reg_eff("Manual/AccentHex", ""), &hex_c)) cf.acc = hex_c;
+    if (parse_hex_rgb(reg_eff("Manual/DeskTopHex", ""), &hex_c)) cf.p.desk_top = hex_c;
+    if (parse_hex_rgb(reg_eff("Manual/DeskBotHex", ""), &hex_c)) cf.p.desk_bot = hex_c;
+    if (parse_hex_rgb(reg_eff("Manual/WindowHex", ""), &hex_c)) {
+        cf.p.win = hex_c;
+        cf.p.bar = hex_c;
+    }
+    cf.accfg = lum(cf.acc) > 145 ? 0x0B1220 : 0xFFFFFF;
+
+    int gm = opt_index(GLASS_LIST, reg_eff("Display/Glass", t == 7 ? "Solid" : "VaporGlass"));
+    cf.glass_mode = gm < 0 ? 0 : gm;
+
+    int op_pct = reg_eff_int("Display/GlassOpacity", cf.glass_mode == 2 ? 62 : 78);
+    if (op_pct < 38) op_pct = 38;
+    if (op_pct > 100) op_pct = 100;
+    cf.glass_alpha = cf.glass_mode == 3 ? 255 : (op_pct * 255) / 100;
+
+    int bl = opt_index(BLUR_LIST, reg_eff("Display/GlassBlur", "Medium"));
+    if (bl < 0) bl = 2;
+    static const int blur_px[4] = { 0, 3, 6, 10 };
+    cf.blur_r = (cf.glass_mode == 3) ? 0 : (cf.glass_mode == 2 ? blur_px[bl] / 2 : blur_px[bl]);
+    cf.sheen  = (cf.glass_mode == 0) ? 24 : (cf.glass_mode == 2 ? 14 : 0);
+
+    cf.radius = reg_eff_int("Display/CornerRadius", t == 7 ? 4 : 10);
+    if (cf.radius < 0) cf.radius = 0;
+    if (cf.radius > 16) cf.radius = 16;
+
+    int fm_idx = opt_index(FONT_LIST, reg_eff("Display/FontSmoothing", "Smooth"));
+    cf.font_mode = fm_idx < 0 ? GFX_FONT_SMOOTH : fm_idx;
+    gfx_set_font_mode(cf.font_mode);
+
+    int b = opt_index(BG_LIST, reg_eff("Desktop/Background", "Aurora"));
+    if (b < 0 && !strcasecmp(reg_eff("Desktop/Background", ""), "Dots")) b = 4;
     cf.bgpat = b < 0 ? 0 : b;
+    cf.desk_icons = reg_eff_int("Desktop/Icons", 1);
+    cf.floating_bar = opt_index("Floating|Docked", reg_eff("Taskbar/Style", t == 7 ? "Docked" : "Floating")) == 0;
     cf.top = opt_index("Top|Bottom", reg_eff("Taskbar/Position", "Top")) != 1;
     cf.clock = reg_eff_int("Taskbar/Clock", 1);
     cf.h12 = opt_index("24-hour|12-hour", reg_eff("Taskbar/Format", "24-hour")) == 1;
@@ -142,7 +252,9 @@ static void load_cfg(void) {
     cf.offset = reg_eff_int("Clock/Offset", 0);
     if (cf.offset < -12) cf.offset = -12;
     if (cf.offset > 14) cf.offset = 14;
-    snprintf(cf.pinned, sizeof cf.pinned, "%s", reg_eff("Taskbar/Pinned", "terminal,settings,registry"));
+    snprintf(cf.pinned, sizeof cf.pinned, "%s",
+             reg_eff("Taskbar/Pinned", "files,terminal,notes,netcenter,settings"));
+
     cf.reqW = cf.reqH = 0;
     const char *rz = reg_eff("Display/Resolution", "Auto");
     int rw, rh;
@@ -151,21 +263,23 @@ static void load_cfg(void) {
     }
 }
 
-/* ================= Hotspots (pixel mouse targets) ================= */
+/* ================= Hotspots & Clipping ================= */
 
 enum {
     A_NONE = 0, A_START, A_PIN, A_TASKWIN, A_CLOSE, A_DESKTOP, A_HIDE,
-    A_WINBODY, A_TITLE, A_WIN_CLOSE, A_WIN_MIN, A_EDGE,
+    A_WINBODY, A_TITLE, A_WIN_CLOSE, A_WIN_MIN, A_WIN_MAX, A_EDGE,
     A_MENU, A_MENUITEM, A_MENUCLOSE, A_TILE, A_STARTCLOSE,
     A_SET_HOME, A_SET_CAT, A_SET_ROW,
     A_REG_NODE, A_REG_VAL,
-    A_DLG_OK, A_DLG_CANCEL
+    A_DLG_OK, A_DLG_CANCEL,
+    A_DESK_ICON, A_CTX_ITEM, A_CTX_CLOSE
 };
 
 struct hot { int x, y, w, h, act, a, b, wid; };
 static struct hot hots[MAXHOT];
 static int nhots, cur_wid;
 static int clip_hx0, clip_hy0, clip_hx1, clip_hy1;
+static int hover_x = -1, hover_y = -1;
 
 static void set_ui_clip(int x, int y, int w, int h) {
     int W = gfx_width(), H = gfx_height();
@@ -196,30 +310,28 @@ static const struct hot *hot_at(int x, int y) {
             y >= hots[i].y && y < hots[i].y + hots[i].h) return &hots[i];
     return NULL;
 }
-
 static int point_in(int px, int py, int x, int y, int w, int h) {
     return px >= x && px < x + w && py >= y && py < y + h;
 }
 
 /* ================= Windows & Desktop State ================= */
 
-enum { WK_SETTINGS = 1, WK_REGISTRY = 2, WK_TERMINAL = 3 };
-
 struct win {
     int used, id, kind;
-    char title[40];
-    int x, y, w, h, minimized;
+    char title[40], sym[4];
+    int x, y, w, h, minimized, maximized;
+    int rx, ry, rw, rh; /* saved restore bounds when maximized */
 };
 
-static struct win wins[6];
-static int zord[6], nz, next_id = 1;
+static struct win wins[MAXWINS];
+static int zord[MAXWINS], nz, next_id = 1;
 static int quit_code = -1;
 static int start_open, menu_win, menu_idx, menu_sel, menu_x[4];
+static int ctx_open, ctx_x, ctx_y;
 static int desk_y0, desk_y1, desk_hidden;
-static char toast_msg[140];
+static char toast_msg[160];
 static time_t toast_until;
 static int mode_move, mode_resize;
-static int hover_x = -1, hover_y = -1;
 
 struct drag { int on, mode, wid, ox, oy, edge, sx, sy, wx, wy, ww, wh; };
 static struct drag drg;
@@ -256,168 +368,148 @@ static void raise_win(struct win *w) {
 }
 static void clamp_win(struct win *w) {
     int W = gfx_width(), dh = desk_y1 - desk_y0;
-    int minw = 340 > W ? W : 340;
-    int minh = 220 > dh ? dh : 220;
-    if (w->w > W) w->w = W;
-    if (w->h > dh) w->h = dh;
-    if (w->w < minw) w->w = minw;
-    if (w->h < minh) w->h = minh;
-    if (w->x < 0) w->x = 0;
-    if (w->x + w->w > W) w->x = W - w->w;
-    if (w->y < desk_y0) w->y = desk_y0;
-    if (w->y + w->h > desk_y1) w->y = desk_y1 - w->h;
+    if (w->maximized) {
+        w->x = 4; w->y = desk_y0 + 4;
+        w->w = W - 8; w->h = dh - 8;
+        return;
+    }
+    int minw = w->kind == WK_CALC ? 280 : 340;
+    int minh = 220;
+    if (w->w > W - 12) w->w = W - 12;
+    if (w->h > dh - 8) w->h = dh - 8;
+    if (w->w < minw) w->w = W - 12 < minw ? W - 12 : minw;
+    if (w->h < minh) w->h = dh - 8 < minh ? dh - 8 : minh;
+    if (w->x < 2) w->x = 2;
+    if (w->y < desk_y0 + 2) w->y = desk_y0 + 2;
+    if (w->x + w->w > W - 2) w->x = W - 2 - w->w;
+    if (w->y + w->h > desk_y1 - 2) w->y = desk_y1 - 2 - w->h;
 }
 
-/* ================= Windowed PTY Terminal Emulator ================= */
+static void toggle_maximize(struct win *w) {
+    if (!w) return;
+    if (!w->maximized) {
+        w->rx = w->x; w->ry = w->y; w->rw = w->w; w->rh = w->h;
+        w->maximized = 1;
+    } else {
+        w->maximized = 0;
+        w->x = w->rx; w->y = w->ry; w->w = w->rw; w->h = w->rh;
+    }
+    clamp_win(w);
+}
 
-#define TMAX_COLS 200
-#define TMAX_ROWS 80
+/* ================= Windowed PTY Terminal Engine ================= */
+
+#define TERM_MAXR 80
+#define TERM_MAXC 200
 
 struct tcell { char ch; uint8_t fg, bg, bold; };
+
+static const uint32_t ansi_pal[16] = {
+    0x0B101C, 0xE05A5A, 0x45C97D, 0xE6B450, 0x5EB8FF, 0xC77DFF, 0x3AD0E6, 0xDCE7F7,
+    0x5A6A85, 0xFF7A7A, 0x6BE59C, 0xFFD06B, 0x82C8FF, 0xDDA2FF, 0x6CE4F5, 0xFFFFFF
+};
 
 static struct {
     int pty_fd;
     pid_t pid;
-    int cols, rows, cx, cy;
+    int rows, cols, cx, cy;
     uint8_t fg, bg, bold;
-    int esc_state, esc_params[8], esc_np;
-    int priv_mode;
-    struct tcell grid[TMAX_ROWS][TMAX_COLS];
-} term = { .pty_fd = -1, .pid = -1 };
-
-static const uint32_t ansi_pal[16] = {
-    0x111827, 0xEF5350, 0x4CD08A, 0xF2B632, 0x5EB8FF, 0xC77DFF, 0x2CC9DC, 0xDCE7F7,
-    0x64748B, 0xFF7A7A, 0x6EE7A8, 0xFACC48, 0x82C8FF, 0xDDA2FF, 0x5CE1F2, 0xFFFFFF
-};
+    int esc_state, csi_params[8], csi_n;
+    struct tcell grid[TERM_MAXR][TERM_MAXC];
+} term = { -1, -1, 22, 80, 0, 0, 7, 16, 0, 0, {0}, 0, {{{0}}} };
 
 static void term_clear_row(int r) {
-    if (r < 0 || r >= TMAX_ROWS) return;
-    for (int c = 0; c < TMAX_COLS; c++)
+    for (int c = 0; c < TERM_MAXC; c++)
         term.grid[r][c] = (struct tcell){ ' ', 7, 16, 0 };
 }
-
 static void term_reset_grid(void) {
-    term.cx = 0; term.cy = 0;
-    term.fg = 7; term.bg = 16; term.bold = 0;
-    term.esc_state = 0;
-    for (int r = 0; r < TMAX_ROWS; r++) term_clear_row(r);
+    for (int r = 0; r < TERM_MAXR; r++) term_clear_row(r);
+    term.cx = term.cy = 0;
+    term.fg = 7; term.bg = 16; term.bold = 0; term.esc_state = 0;
 }
-
 static void term_scroll_up(void) {
-    int rows = term.rows > 0 ? term.rows : 24;
-    for (int r = 0; r < rows - 1; r++)
-        memcpy(term.grid[r], term.grid[r + 1], sizeof(term.grid[0]));
-    term_clear_row(rows - 1);
+    for (int r = 0; r < term.rows - 1; r++)
+        memcpy(term.grid[r], term.grid[r + 1], sizeof term.grid[0]);
+    term_clear_row(term.rows - 1);
 }
-
+static void term_handle_sgr(void) {
+    if (term.csi_n == 0) { term.csi_params[0] = 0; term.csi_n = 1; }
+    for (int i = 0; i < term.csi_n; i++) {
+        int p = term.csi_params[i];
+        if (p == 0) { term.fg = 7; term.bg = 16; term.bold = 0; }
+        else if (p == 1) term.bold = 1;
+        else if (p == 22) term.bold = 0;
+        else if (p >= 30 && p <= 37) term.fg = (uint8_t)(p - 30);
+        else if (p == 39) term.fg = 7;
+        else if (p >= 40 && p <= 47) term.bg = (uint8_t)(p - 40);
+        else if (p == 49) term.bg = 16;
+        else if (p >= 90 && p <= 97) term.fg = (uint8_t)(p - 90 + 8);
+        else if (p >= 100 && p <= 107) term.bg = (uint8_t)(p - 100 + 8);
+    }
+}
 static void term_putc(unsigned char ch) {
-    int cols = term.cols > 0 ? term.cols : 80;
-    int rows = term.rows > 0 ? term.rows : 24;
-
     if (term.esc_state == 1) {
-        if (ch == '[') {
-            term.esc_state = 2;
-            memset(term.esc_params, 0, sizeof term.esc_params);
-            term.esc_np = 0;
-            term.priv_mode = 0;
-            return;
-        }
-        term.esc_state = 0;
+        if (ch == '[') { term.esc_state = 2; term.csi_n = 0; memset(term.csi_params, 0, sizeof term.csi_params); }
+        else if (ch == 'c') { term_reset_grid(); term.esc_state = 0; }
+        else term.esc_state = 0;
         return;
     }
     if (term.esc_state == 2) {
-        if (ch == '?') { term.priv_mode = 1; return; }
+        if (ch == '?') return;
         if (ch >= '0' && ch <= '9') {
-            if (term.esc_np == 0) term.esc_np = 1;
-            term.esc_params[term.esc_np - 1] = term.esc_params[term.esc_np - 1] * 10 + (ch - '0');
+            if (term.csi_n == 0) term.csi_n = 1;
+            term.csi_params[term.csi_n - 1] = term.csi_params[term.csi_n - 1] * 10 + (ch - '0');
             return;
         }
-        if (ch == ';') {
-            if (term.esc_np < 8) term.esc_np++;
-            return;
-        }
-        term.esc_state = 0;
-        if (term.priv_mode) return;
-        int p0 = term.esc_np >= 1 ? term.esc_params[0] : 0;
-        int p1 = term.esc_np >= 2 ? term.esc_params[1] : 0;
+        if (ch == ';') { if (term.csi_n < 8) term.csi_n++; return; }
+        int p1 = term.csi_n >= 1 && term.csi_params[0] > 0 ? term.csi_params[0] : 1;
+        int p2 = term.csi_n >= 2 && term.csi_params[1] > 0 ? term.csi_params[1] : 1;
         switch (ch) {
-        case 'A': term.cy -= (p0 ? p0 : 1); if (term.cy < 0) term.cy = 0; break;
-        case 'B': term.cy += (p0 ? p0 : 1); if (term.cy >= rows) term.cy = rows - 1; break;
-        case 'C': term.cx += (p0 ? p0 : 1); if (term.cx >= cols) term.cx = cols - 1; break;
-        case 'D': term.cx -= (p0 ? p0 : 1); if (term.cx < 0) term.cx = 0; break;
-        case 'G': term.cx = (p0 ? p0 - 1 : 0); if (term.cx < 0) term.cx = 0; if (term.cx >= cols) term.cx = cols - 1; break;
+        case 'A': term.cy -= p1; if (term.cy < 0) term.cy = 0; break;
+        case 'B': term.cy += p1; if (term.cy >= term.rows) term.cy = term.rows - 1; break;
+        case 'C': term.cx += p1; if (term.cx >= term.cols) term.cx = term.cols - 1; break;
+        case 'D': term.cx -= p1; if (term.cx < 0) term.cx = 0; break;
+        case 'G': term.cx = p1 - 1; if (term.cx >= term.cols) term.cx = term.cols - 1; break;
         case 'H': case 'f':
-            term.cy = (p0 ? p0 - 1 : 0);
-            term.cx = (p1 ? p1 - 1 : 0);
-            if (term.cy < 0) term.cy = 0;
-            if (term.cy >= rows) term.cy = rows - 1;
-            if (term.cx < 0) term.cx = 0;
-            if (term.cx >= cols) term.cx = cols - 1;
+            term.cy = p1 - 1; term.cx = p2 - 1;
+            if (term.cy < 0) term.cy = 0; else if (term.cy >= term.rows) term.cy = term.rows - 1;
+            if (term.cx < 0) term.cx = 0; else if (term.cx >= term.cols) term.cx = term.cols - 1;
             break;
         case 'J':
-            if (p0 == 2) { for (int r = 0; r < rows; r++) term_clear_row(r); term.cx = 0; term.cy = 0; }
+            if (term.csi_params[0] == 2) { for (int r = 0; r < term.rows; r++) term_clear_row(r); term.cx = term.cy = 0; }
             else {
-                for (int c = term.cx; c < cols; c++) term.grid[term.cy][c] = (struct tcell){ ' ', 7, 16, 0 };
-                for (int r = term.cy + 1; r < rows; r++) term_clear_row(r);
+                for (int c = term.cx; c < term.cols; c++) term.grid[term.cy][c] = (struct tcell){ ' ', 7, 16, 0 };
+                for (int r = term.cy + 1; r < term.rows; r++) term_clear_row(r);
             }
             break;
         case 'K':
-            for (int c = (p0 == 2 ? 0 : term.cx); c < (p0 == 1 ? term.cx + 1 : cols); c++)
-                term.grid[term.cy][c] = (struct tcell){ ' ', 7, 16, 0 };
+            for (int c = term.cx; c < term.cols; c++) term.grid[term.cy][c] = (struct tcell){ ' ', 7, 16, 0 };
             break;
-        case 'm':
-            if (term.esc_np == 0) { term.fg = 7; term.bg = 16; term.bold = 0; break; }
-            for (int i = 0; i < term.esc_np; i++) {
-                int v = term.esc_params[i];
-                if (v == 0) { term.fg = 7; term.bg = 16; term.bold = 0; }
-                else if (v == 1) term.bold = 1;
-                else if (v == 22) term.bold = 0;
-                else if (v >= 30 && v <= 37) term.fg = (uint8_t)(v - 30);
-                else if (v == 39) term.fg = 7;
-                else if (v >= 40 && v <= 47) term.bg = (uint8_t)(v - 40);
-                else if (v == 49) term.bg = 16;
-                else if (v >= 90 && v <= 97) term.fg = (uint8_t)(v - 90 + 8);
-                else if (v >= 100 && v <= 107) term.bg = (uint8_t)(v - 100 + 8);
-            }
-            break;
+        case 'm': term_handle_sgr(); break;
         }
+        term.esc_state = 0;
         return;
     }
 
     if (ch == 27) { term.esc_state = 1; return; }
     if (ch == '\r') { term.cx = 0; return; }
-    if (ch == '\n') {
-        term.cy++;
-        if (term.cy >= rows) { term_scroll_up(); term.cy = rows - 1; }
-        return;
-    }
+    if (ch == '\n') { term.cy++; if (term.cy >= term.rows) { term_scroll_up(); term.cy = term.rows - 1; } return; }
     if (ch == '\b' || ch == 127) { if (term.cx > 0) term.cx--; return; }
-    if (ch == '\t') {
-        int next = (term.cx + 8) & ~7;
-        while (term.cx < next && term.cx < cols) {
-            term.grid[term.cy][term.cx++] = (struct tcell){ ' ', term.fg, term.bg, term.bold };
-        }
-        return;
-    }
+    if (ch == '\t') { term.cx = (term.cx + 8) & ~7; if (term.cx >= term.cols) term.cx = term.cols - 1; return; }
     if (ch < 32) return;
-    if (term.cx >= cols) {
-        term.cx = 0;
-        term.cy++;
-        if (term.cy >= rows) { term_scroll_up(); term.cy = rows - 1; }
+
+    if (term.cx >= term.cols) {
+        term.cx = 0; term.cy++;
+        if (term.cy >= term.rows) { term_scroll_up(); term.cy = term.rows - 1; }
     }
-    term.grid[term.cy][term.cx++] = (struct tcell){
-        (char)(ch <= 126 ? ch : '?'), term.fg, term.bg, term.bold
-    };
+    term.grid[term.cy][term.cx++] = (struct tcell){ (char)(ch < 127 ? ch : '?'), term.fg, term.bg, term.bold };
 }
 
 static void term_resize_pty(int cols, int rows) {
-    if (cols < 20) cols = 20;
-    if (cols > TMAX_COLS) cols = TMAX_COLS;
-    if (rows < 6) rows = 6;
-    if (rows > TMAX_ROWS) rows = TMAX_ROWS;
+    if (cols < 20) cols = 20; else if (cols > TERM_MAXC) cols = TERM_MAXC;
+    if (rows < 6)  rows = 6;  else if (rows > TERM_MAXR) rows = TERM_MAXR;
     if (cols == term.cols && rows == term.rows) return;
-    term.cols = cols;
-    term.rows = rows;
+    term.cols = cols; term.rows = rows;
     if (term.cx >= cols) term.cx = cols - 1;
     if (term.cy >= rows) term.cy = rows - 1;
     if (term.pty_fd >= 0) {
@@ -437,13 +529,7 @@ static void term_stop(void) {
 }
 
 static int term_start(int cols, int rows, const char *init_cmd) {
-    if (term.pty_fd >= 0) {
-        if (init_cmd && init_cmd[0]) {
-            write(term.pty_fd, init_cmd, strlen(init_cmd));
-            write(term.pty_fd, "\n", 1);
-        }
-        return 0;
-    }
+    if (term.pty_fd >= 0) return 0;
     int mfd = open("/dev/ptmx", O_RDWR | O_NOCTTY | O_CLOEXEC);
     if (mfd < 0) return -1;
     int unlock = 0;
@@ -505,8 +591,8 @@ static int term_pump(void) {
         break;
     }
     if (term.pid > 0) {
-        int st;
-        if (waitpid(term.pid, &st, WNOHANG) == term.pid) {
+        int st_w;
+        if (waitpid(term.pid, &st_w, WNOHANG) == term.pid) {
             term.pid = -1;
             term_stop();
             return -1;
@@ -542,9 +628,8 @@ static void term_send_key(int k) {
 }
 
 static void terminal_draw(int x, int y, int cw, int ch, int active) {
-    uint32_t bg0 = 0x0B101C;
     set_ui_clip(x, y, cw, ch);
-    gfx_rect(x, y, cw, ch, bg0);
+    gfx_rect_alpha(x, y, cw, ch, 0x070B14, cf.glass_mode == 3 ? 255 : 220);
 
     int cols = (cw - 16) / 8;
     int rows = (ch - 12) / 16;
@@ -580,7 +665,40 @@ static void terminal_draw(int x, int y, int cw, int ch, int active) {
     }
 }
 
-/* ================= Registry-backed helpers ================= */
+/* ================= Callbacks exported to gui_apps.c ================= */
+
+static struct win *open_win_arg(int kind, const char *arg);
+static struct win *open_win(int kind) { return open_win_arg(kind, NULL); }
+
+void ui_get_theme(struct ui_theme *out) {
+    out->win      = cf.p.win;
+    out->win_alt  = cf.p.win_alt;
+    out->winfg    = cf.p.winfg;
+    out->titleoff = cf.p.titleoff;
+    out->border   = cf.p.border;
+    out->muted    = cf.p.muted;
+    out->sel      = cf.p.sel;
+    out->input_bg = cf.p.input_bg;
+    out->ok       = cf.p.ok;
+    out->bad      = cf.p.bad;
+    out->acc      = cf.acc;
+    out->accfg    = cf.accfg;
+    out->radius   = cf.radius;
+}
+void ui_set_clip(int x, int y, int w, int h) { set_ui_clip(x, y, w, h); }
+void ui_hot_add(int x, int y, int w, int h, int act, int a, int b) { hot_add(x, y, w, h, act, a, b); }
+int  ui_hover_in(int x, int y, int w, int h) { return point_in(hover_x, hover_y, x, y, w, h); }
+void ui_toast(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(toast_msg, sizeof toast_msg, fmt, ap);
+    va_end(ap);
+    toast_until = time(NULL) + 4;
+}
+void ui_open_app(int kind, const char *arg) { open_win_arg(kind, arg); desk_hidden = 0; }
+void ui_reload_manual_cfg(void) { mg_conf_load_all(); load_cfg(); }
+
+/* ================= Registry-backed helpers & App Scanner ================= */
 
 static int get_toggle(int hv, const char *key, const char *def) {
     const char *v = hv == HIVE_SYSTEM ? reg_get(HIVE_SYSTEM, key, def) : reg_eff(key, def);
@@ -615,10 +733,10 @@ static void set_pinned(const char *name, int on) {
     load_cfg();
 }
 
-static char apps[64][40];
+static char apps[80][40];
 static int napps;
 static void scan_apps(void) {
-    static const char *dirs[] = { "/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/data/bin", NULL };
+    static const char *dirs[] = { "/programs", "/data/programs", "/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/data/bin", NULL };
     napps = 0;
     for (int d = 0; dirs[d]; d++) {
         DIR *dp = opendir(dirs[d]);
@@ -627,15 +745,35 @@ static void scan_apps(void) {
         while ((e = readdir(dp)) != NULL && napps < N(apps)) {
             if (e->d_name[0] == '.' || !strcmp(e->d_name, "passwd") || strlen(e->d_name) >= sizeof apps[0]) continue;
             char full[300];
-            struct stat st;
+            struct stat st_f;
             snprintf(full, sizeof full, "%s/%s", dirs[d], e->d_name);
-            if (stat(full, &st) != 0 || !S_ISREG(st.st_mode) || access(full, X_OK) != 0) continue;
+            if (stat(full, &st_f) != 0 || !S_ISREG(st_f.st_mode) || access(full, X_OK) != 0) continue;
             int dup = 0;
             for (int i = 0; i < napps; i++) if (!strcmp(apps[i], e->d_name)) dup = 1;
             if (!dup) snprintf(apps[napps++], sizeof apps[0], "%s", e->d_name);
         }
         closedir(dp);
     }
+}
+
+void ui_run_terminal_cmd(const char *cmd) {
+    int wk = apps_kind_from_name(cmd, NULL, NULL);
+    if (wk > 0) { open_win(wk); return; }
+    struct win *tw = open_win(WK_TERMINAL);
+    if (tw && term.pty_fd >= 0) {
+        ssize_t w1 = write(term.pty_fd, cmd, strlen(cmd));
+        ssize_t w2 = write(term.pty_fd, "\r", 1);
+        (void)w1; (void)w2;
+        return;
+    }
+    gfx_suspend();
+    printf("\r\n");
+    shell_exec_line(cmd);
+    fputs("\nPress Enter to return to the desktop...", stdout);
+    fflush(stdout);
+    char c;
+    while (read(0, &c, 1) == 1 && c != '\n') ;
+    gfx_resume();
 }
 
 /* ================= Dialogs ================= */
@@ -663,12 +801,13 @@ static void draw_button(int x, int y, int w, int h, const char *label, uint32_t 
     int hov = point_in(hover_x, hover_y, x, y, w, h);
     uint32_t fillc = bg;
     if (hov) {
-        int r = ((bg >> 16) & 255) + 18; if (r > 255) r = 255;
-        int g = ((bg >> 8) & 255) + 18;  if (g > 255) g = 255;
-        int bl = (bg & 255) + 18;        if (bl > 255) bl = 255;
+        int r = ((bg >> 16) & 255) + 20; if (r > 255) r = 255;
+        int g = ((bg >> 8) & 255) + 20;  if (g > 255) g = 255;
+        int bl = (bg & 255) + 20;        if (bl > 255) bl = 255;
         fillc = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bl;
     }
-    gfx_rrect(x, y, w, h, 6, fillc);
+    int rad = cf.radius > 7 ? 7 : cf.radius;
+    gfx_rrect(x, y, w, h, rad, fillc);
     int tw = gfx_text_width(label, 1);
     gfx_text(x + (w - tw) / 2, y + (h - 16) / 2, label, fg, 1, 1, w - 8);
     if (act) hot_add(x, y, w, h, act, a, b);
@@ -679,26 +818,24 @@ static void draw_dialog(void) {
     int W = gfx_width(), H = gfx_height();
     const struct pal *p = &cf.p;
     reset_ui_clip();
-    gfx_rect_alpha(0, 0, W, H, 0x000000, 120);
+    gfx_rect_alpha(0, 0, W, H, 0x000000, 115);
     hot_add(0, 0, W, H, A_NONE, 0, 0);
 
     int w = W - 40 < 480 ? W - 40 : 480;
-    int h = dlg.type == D_INPUT ? 186 : 146;
+    int h = dlg.type == D_INPUT ? 188 : 148;
     int x = (W - w) / 2, y = (H - h) / 2;
     cur_wid = 0;
 
-    gfx_shadow(x, y, w, h, 8);
-    gfx_rrect(x, y, w, h, 8, p->win);
-    gfx_rrect(x, y, w, 34, 8, cf.acc);
-    gfx_rect(x, y + 26, w, 8, cf.acc);
-    gfx_rrect_outline(x, y, w, h, 8, cf.acc);
-    gfx_text(x + 14, y + 9, dlg.title, cf.accfg, 1, 1, w - 28);
+    gfx_shadow(x, y, w, h, cf.radius);
+    gfx_glass_panel(x, y, w, h, cf.radius, p->win, cf.glass_alpha, cf.blur_r, cf.acc, cf.sheen);
+    gfx_rrect_alpha(x + 1, y + 1, w - 2, 34, cf.radius, cf.acc, 215);
+    gfx_text(x + 16, y + 9, dlg.title, cf.accfg, 1, 1, w - 32);
     gfx_text(x + 16, y + 50, dlg.msg, p->winfg, 0, 1, w - 32);
 
     if (dlg.type == D_INPUT) {
         int ix = x + 16, iy = y + 80, iw = w - 32, ih = 32;
-        gfx_rrect(ix, iy, iw, ih, 5, p->input_bg);
-        gfx_rrect_outline(ix, iy, iw, ih, 5, cf.acc);
+        gfx_rrect(ix, iy, iw, ih, 6, p->input_bg);
+        gfx_rrect_outline(ix, iy, iw, ih, 6, cf.acc);
         int maxchars = (iw - 20) / 8;
         int start = dlg.cur > maxchars ? dlg.cur - maxchars : 0;
         gfx_text(ix + 10, iy + 8, dlg.buf + start, p->winfg, 0, 1, iw - 20);
@@ -717,37 +854,18 @@ static void draw_dialog(void) {
     }
 }
 
-/* ================= External App Launch / Windowed Terminal ================= */
+/* ================= Settings (Themes, VaporGlass, Manual, Network, Drivers) ================= */
 
-static struct win *open_win(int kind);
-
-static void launch_external(const char *cmd) {
-    /* Try running inside the graphical Windowed Terminal first! */
-    struct win *tw = open_win(WK_TERMINAL);
-    if (tw && term.pty_fd >= 0) {
-        write(term.pty_fd, cmd, strlen(cmd));
-        write(term.pty_fd, "\r", 1);
-        return;
-    }
-    /* Fallback if PTY is unavailable: temporarily suspend KMS/fbdev to console */
-    gfx_suspend();
-    printf("\r\n");
-    shell_exec_line(cmd);
-    fputs("\nPress Enter to return to the desktop...", stdout);
-    fflush(stdout);
-    char c;
-    while (read(0, &c, 1) == 1 && c != '\n') ;
-    gfx_resume();
-}
-
-/* ================= Settings ================= */
-
-enum { R_HEAD, R_INFO, R_TOGGLE, R_CHOICE, R_TEXT, R_BUTTON, R_APP };
+enum { R_HEAD, R_INFO, R_TOGGLE, R_CHOICE, R_TEXT, R_BUTTON, R_APP, R_DRV };
 enum {
     I_OS, I_KERNEL, I_MEM, I_UPTIME, I_TIME, I_USER, I_HOME, I_ACCOUNTS,
-    I_RAM, I_DATA, I_POLICY, I_REG, I_GPU, I_GPUMODE
+    I_RAM, I_DATA, I_POLICY, I_REG, I_GPU, I_GPUMODE, I_NET_ADAPTER, I_NET_ADDR
 };
-enum { B_REBOOT, B_HALT, B_LOGOUT, B_SETTIME, B_PASSWD, B_REGEDIT, B_RESET };
+enum {
+    B_REBOOT, B_HALT, B_LOGOUT, B_SETTIME, B_PASSWD, B_REGEDIT, B_RESET,
+    B_EDIT_USERCONF, B_EDIT_SYSCONF, B_RELOAD_CONF, B_CLEAR_MANUAL,
+    B_NET_DHCP, B_NET_APPLY, B_NET_CENTER, B_OPEN_SYSMON
+};
 
 struct row { int kind; const char *label, *sub, *key, *opts, *def; int sys, id; };
 
@@ -761,6 +879,7 @@ static const struct row r_system[] = {
     HEAD("About"),
     INFO("System", "Name and version", I_OS),
     INFO("Graphics", "Active display driver", I_GPU),
+    INFO("Network", "Primary network interface", I_NET_ADAPTER),
     INFO("Kernel", "The Linux kernel underneath", I_KERNEL),
     INFO("Memory", "Total and free", I_MEM),
     INFO("Uptime", "Time since boot", I_UPTIME),
@@ -777,28 +896,64 @@ static const struct row r_display[] = {
     INFO("Adapter", "Active GPU driver or Basic Display", I_GPU),
     INFO("Pipeline", "Scanout, cursor, and modesetting", I_GPUMODE),
     CHO("Resolution", "Live GPU modeset, or fixed firmware mode", "Display/Resolution", res_opts_buf, "Auto"),
-    HEAD("Appearance"),
-    CHO("Theme", "Colors of windows and taskbar", "Display/Theme", "Dark|Light|Ember", "Dark"),
-    CHO("Accent color", "Highlights, buttons and the 12 Mg start tile", "Display/Accent", "Flame|Orange|Cyan|Green|Magenta|Gold", "Flame"),
-    CHO("Desktop background", "Wallpaper style behind windows", "Desktop/Background", "Gradient|Dots|Grid|Solid", "Gradient"),
+    HEAD("Themes & VaporGlass"),
+    CHO("Theme", "8 built-in Magnesium color & glass palettes", "Display/Theme", THEME_LIST, "Magnesium"),
+    CHO("Accent color", "Highlights, active headers, and 12 Mg badge", "Display/Accent", ACCENT_LIST, "Sky"),
+    CHO("Glass effect", "Translucent frosted crystal optics (not Windows Aero)", "Display/Glass", GLASS_LIST, "VaporGlass"),
+    CHO("Font smoothing", "Anti-aliased smooth, LCD subpixel, or crisp bitmap", "Display/FontSmoothing", FONT_LIST, "Smooth"),
+    CHO("Wallpaper", "Aurora ribbons, nebula, prism, gradient, grid, solid", "Desktop/Background", BG_LIST, "Aurora"),
+};
+
+static const struct row r_manual[] = {
+    HEAD("Manual Glass & Geometry Tuning"),
+    CHO("Glass opacity (%)", "Panel translucency from 45% to 100%", "Display/GlassOpacity", "45|58|68|78|86|94|100", "78"),
+    CHO("Backdrop blur", "2-pass frosted blur strength behind windows", "Display/GlassBlur", BLUR_LIST, "Medium"),
+    CHO("Corner radius", "Window & control rounding in pixels", "Display/CornerRadius", "0|4|8|10|14", "10"),
+    TOG("Desktop shortcut icons", "Show Programs, Notes, Network & Terminal on desktop", "Desktop/Icons", "1"),
+    HEAD("Manual Hex Color Overrides (#RRGGBB)"),
+    { R_TEXT, "Custom accent (#RRGGBB)", "Overrides theme accent (e.g. #00E5FF, empty = default)", "Manual/AccentHex", 0, "", 0, 0 },
+    { R_TEXT, "Custom wallpaper top (#RRGGBB)", "Manual top gradient color", "Manual/DeskTopHex", 0, "", 0, 0 },
+    { R_TEXT, "Custom wallpaper bottom (#RRGGBB)", "Manual bottom gradient color", "Manual/DeskBotHex", 0, "", 0, 0 },
+    { R_TEXT, "Custom window glass (#RRGGBB)", "Manual window & bar tint color", "Manual/WindowHex", 0, "", 0, 0 },
+    BTN("Clear manual color overrides", "Return colors to the selected theme preset", B_CLEAR_MANUAL),
+    HEAD("Config Files (mg.conf)"),
+    BTN("Edit ~/.mg.conf in Notes", "Open your personal manual config file", B_EDIT_USERCONF),
+    BTN("Edit /etc/mg.conf in Notes", "Open system-wide manual config file", B_EDIT_SYSCONF),
+    BTN("Reload mg.conf now", "Apply manual file edits immediately", B_RELOAD_CONF),
+};
+
+static const struct row r_network[] = {
+    HEAD("Status"),
+    INFO("Adapter & driver", "Detected Ethernet/VirtIO/USB NIC", I_NET_ADAPTER),
+    INFO("IPv4 & routing", "Current IP, gateway, and DNS server", I_NET_ADDR),
+    BTN("Open Network Center & Web Reader", "Ping tools & live HTTP page viewer", B_NET_CENTER),
+    HEAD("Configuration (DHCP or Manual)"),
+    { R_CHOICE, "Address mode", "Automatic DHCP lease or manual static IPv4", "Network/Mode", "DHCP|Manual", "DHCP", 1, 0 },
+    BTN("Acquire DHCP lease now", "Send DHCPDISCOVER on primary adapter (root)", B_NET_DHCP),
+    { R_TEXT, "Manual IPv4 address", "Used when mode is Manual (e.g. 10.0.2.15)", "Network/IP", 0, "10.0.2.15", 1, 0 },
+    { R_TEXT, "Manual subnet mask", "Subnet mask (e.g. 255.255.255.0)", "Network/Netmask", 0, "255.255.255.0", 1, 0 },
+    { R_TEXT, "Manual default gateway", "Router IP (e.g. 10.0.2.2)", "Network/Gateway", 0, "10.0.2.2", 1, 0 },
+    { R_TEXT, "DNS nameserver", "UDP DNS server (e.g. 10.0.2.3 or 1.1.1.1)", "Network/DNS", 0, "10.0.2.3", 1, 0 },
+    BTN("Apply network settings", "Configure adapter with selected mode (root)", B_NET_APPLY),
 };
 
 static const struct row r_taskbar[] = {
     HEAD("Layout"),
     CHO("Position", "Where the taskbar sits", "Taskbar/Position", "Top|Bottom", "Top"),
+    CHO("Taskbar style", "Floating VaporGlass dock or edge-to-edge bar", "Taskbar/Style", "Floating|Docked", "Floating"),
     TOG("Show app names", "Off shows two-letter element symbols only", "Taskbar/Labels", "1"),
     TOG("Window buttons", "The X  O  \xe2\x80\x94 buttons on the taskbar", "Taskbar/Controls", "1"),
-    { R_TEXT, "Pinned apps", "Comma-separated: terminal, settings, registry, or command", "Taskbar/Pinned", 0, "terminal,settings,registry", 0, 0 },
+    { R_TEXT, "Pinned apps", "Comma-separated: files, terminal, notes, calc, netcenter, settings", "Taskbar/Pinned", 0, "files,terminal,notes,netcenter,settings", 0, 0 },
     HEAD("Clock"),
     TOG("Show clock", "Time on the right of the taskbar", "Taskbar/Clock", "1"),
     CHO("Time format", "24-hour or 12-hour", "Taskbar/Format", "24-hour|12-hour", "24-hour"),
-    TOG("Show seconds", "Update every second", "Taskbar/Seconds", "0"),
+    TOG("Show seconds", "Update every second", "Taskbar/Seconds", 0 ? "1" : "0"),
     TOG("Show date", "Weekday and date next to the time", "Taskbar/Date", "1"),
 };
 
 static const struct row r_time[] = {
     HEAD("Clock"),
-    INFO("Now (UTC)", "From the computer's clock", I_TIME),
+    INFO("Now (UTC)", "From the computer's hardware RTC clock", I_TIME),
     CHO("Time zone offset", "Hours from UTC, used by the taskbar", "Clock/Offset",
         "-12|-11|-10|-9|-8|-7|-6|-5|-4|-3|-2|-1|0|1|2|3|4|5|6|7|8|9|10|11|12|13|14", "0"),
     HEAD("Set the clock"),
@@ -838,29 +993,40 @@ static const struct row r_terminal[] = {
 static const struct row r_advanced[] = {
     HEAD("Tools"),
     BTN("Open Registry Editor", "View and change every stored value", B_REGEDIT),
+    BTN("Open System & Driver Monitor", "Live CPU, memory, tasks & hardware drivers", B_OPEN_SYSMON),
     HEAD("Reset"),
     BTN("Reset my settings", "Back to defaults; environment variables are kept", B_RESET),
 };
 
+/* n == -1: Apps list; n == -2: Hardware Drivers list */
 struct cat { const char *name, *sym, *desc; const struct row *rows; int n; };
 static const struct cat cats[] = {
-    { "System",     "Sy", "About, GPU, startup, power", r_system,   N(r_system) },
-    { "Display",    "Dp", "GPU driver, resolution, look", r_display, N(r_display) },
-    { "Taskbar",    "Tb", "Position, clock, pinned",    r_taskbar,  N(r_taskbar) },
-    { "Date & time","Dt", "Clock and time zone",        r_time,     N(r_time) },
-    { "Apps",       "Ap", "Installed programs, pins",   NULL,       -1 },
-    { "Accounts",   "Ac", "Your account and users",     r_accounts, N(r_accounts) },
-    { "Storage",    "St", "Memory and disk space",      r_storage,  N(r_storage) },
-    { "Security",   "Sc", "Password rules",             r_security, N(r_security) },
-    { "Terminal",   "Tm", "Prompt and shell",           r_terminal, N(r_terminal) },
-    { "Advanced",   "Ad", "Registry and reset",         r_advanced, N(r_advanced) },
+    { "System",     "Sy", "About, GPU, startup, power",   r_system,   N(r_system) },
+    { "Display",    "Dp", "Themes, VaporGlass, smooth font", r_display, N(r_display) },
+    { "Manual",     "Mn", "Hex colors, blur, mg.conf",    r_manual,   N(r_manual) },
+    { "Network",    "Nw", "DHCP, manual IP, DNS, HTTP",   r_network,  N(r_network) },
+    { "Drivers",    "Dv", "GPU, NIC, disk, USB & input",  NULL,       -2 },
+    { "Apps",       "Ap", "Built-in /programs & pins",    NULL,       -1 },
+    { "Taskbar",    "Tb", "Floating dock, clock, pins",   r_taskbar,  N(r_taskbar) },
+    { "Date & time","Dt", "RTC clock and time zone",      r_time,     N(r_time) },
+    { "Accounts",   "Ac", "Your account and users",       r_accounts, N(r_accounts) },
+    { "Storage",    "St", "Memory and disk space",        r_storage,  N(r_storage) },
+    { "Security",   "Sc", "Password rules",               r_security, N(r_security) },
+    { "Terminal",   "Tm", "Prompt and shell",             r_terminal, N(r_terminal) },
+    { "Advanced",   "Ad", "Registry, monitor, reset",     r_advanced, N(r_advanced) },
 };
 #define NCATS N(cats)
 
+static struct hw_driver_item set_drvs[64];
+static int n_set_drvs;
 static struct { int page, sel, scroll, hsel, cols; } st = { -1, -1, 0, 0, 2 };
 
-static int cat_nrows(int c) { return cats[c].n < 0 ? napps : cats[c].n; }
-static void get_row(int c, int i, struct row *r, char *lab) {
+static int cat_nrows(int c) {
+    if (cats[c].n == -1) return napps;
+    if (cats[c].n == -2) return n_set_drvs + 1;
+    return cats[c].n;
+}
+static void get_row(int c, int i, struct row *r, char *lab, char *sub_buf) {
     if (cats[c].n >= 0) {
         *r = cats[c].rows[i];
         if (r->key && !strcmp(r->key, "Display/Resolution")) {
@@ -870,12 +1036,28 @@ static void get_row(int c, int i, struct row *r, char *lab) {
         return;
     }
     memset(r, 0, sizeof *r);
+    if (cats[c].n == -2) {
+        if (i == 0) {
+            r->kind = R_BUTTON; r->id = B_OPEN_SYSMON;
+            r->label = "Open System & Driver Monitor";
+            r->sub = "Live graphs, process list, and full hardware table";
+            return;
+        }
+        int di = i - 1;
+        r->kind = R_DRV;
+        snprintf(lab, 64, "[%s] %s", set_drvs[di].category, set_drvs[di].driver);
+        snprintf(sub_buf, 128, "%s  (%s)", set_drvs[di].desc, set_drvs[di].slot);
+        r->label = lab;
+        r->sub = sub_buf;
+        r->id = set_drvs[di].active;
+        return;
+    }
     r->kind = R_APP;
-    snprintf(lab, 40, "%s", apps[i]);
+    snprintf(lab, 64, "%s", apps[i]);
     r->label = lab;
-    r->sub = "Show this program on the taskbar";
+    r->sub = "Click to toggle taskbar pin (or launch from 12 Mg / /programs)";
 }
-static int selectable(const struct row *r) { return r->kind >= R_TOGGLE; }
+static int selectable(const struct row *r) { return r->kind >= R_TOGGLE && r->kind != R_DRV; }
 
 static void fmt_mb(char *b, size_t n, unsigned long long bytes) {
     if (bytes >= (1ULL << 30)) snprintf(b, n, "%.1f GB", (double)bytes / (1 << 30));
@@ -915,7 +1097,28 @@ static void info_text(int id, char *b, size_t n) {
         else
             snprintf(b, n, "Firmware FB \xc2\xb7 Shadow Blit \xc2\xb7 SW Cursor");
         break;
-    case I_KERNEL: if (uname(&u) == 0) snprintf(b, n, "%s %s %s", u.sysname, u.release, u.machine); break;
+    case I_NET_ADAPTER: {
+        struct net_iface ifs[8];
+        int cnt = net_list_ifaces(ifs, 8), pick = -1;
+        for (int i = 0; i < cnt; i++) if (!ifs[i].loopback) { pick = i; break; }
+        if (pick >= 0)
+            snprintf(b, n, "%s (%s, %s)", ifs[pick].name, ifs[pick].driver, ifs[pick].up ? "UP" : "DOWN");
+        else
+            snprintf(b, n, "Loopback only");
+        break;
+    }
+    case I_NET_ADDR: {
+        struct net_iface ifs[8];
+        int cnt = net_list_ifaces(ifs, 8), pick = -1;
+        for (int i = 0; i < cnt; i++) if (!ifs[i].loopback) { pick = i; break; }
+        if (pick >= 0)
+            snprintf(b, n, "%s  gw %s  dns %s", ifs[pick].ip,
+                     ifs[pick].gateway[0] ? ifs[pick].gateway : "-", ifs[pick].dns);
+        else
+            snprintf(b, n, "127.0.0.1");
+        break;
+    }
+    case I_KERNEL: if (uname(&u) == 0) snprintf(b, n, "%.32s %.64s %.32s", u.sysname, u.release, u.machine); break;
     case I_MEM:
         if (sysinfo(&si) == 0) {
             unsigned long long unit = si.mem_unit ? si.mem_unit : 1;
@@ -1010,13 +1213,15 @@ static void apply_display_resolution_from_cfg(void) {
 
 static void row_activate(int ci, int ri, int dir) {
     struct row r;
-    char lab[48], val[160];
-    get_row(ci, ri, &r, lab);
+    char lab[64], sub_b[128], val[160];
+    get_row(ci, ri, &r, lab, sub_b);
     int hv = r.sys ? HIVE_SYSTEM : HIVE_USER;
     switch (r.kind) {
     case R_TOGGLE:
         if (reg_set(hv, r.key, get_toggle(hv, r.key, r.def) ? "0" : "1") < 0) save_error(r.label);
-        break;
+        load_cfg();
+        layout_desktop();
+        return;
     case R_CHOICE: {
         if (r.key && !strcmp(r.key, "Display/Resolution") && !gfx_get_info()->modeset) {
             toast("Basic Display mode uses fixed boot firmware resolution (load a GPU driver for KMS modeset)");
@@ -1029,6 +1234,7 @@ static void row_activate(int ci, int ri, int dir) {
         opt_get(r.opts, idx, val, sizeof val);
         if (reg_set(hv, r.key, val) < 0) save_error(r.label);
         load_cfg();
+        layout_desktop();
         if (r.key && !strcmp(r.key, "Display/Resolution")) apply_display_resolution_from_cfg();
         return;
     }
@@ -1052,8 +1258,48 @@ static void row_activate(int ci, int ri, int dir) {
             dlg_open(D_INPUT, P_SET_TIME, "Set date and time", "Enter UTC time as YYYY-MM-DD HH:MM", t);
             break;
         }
-        case B_PASSWD: launch_external("passwd"); break;
+        case B_PASSWD: ui_run_terminal_cmd("passwd"); break;
         case B_REGEDIT: open_win(WK_REGISTRY); break;
+        case B_OPEN_SYSMON: open_win(WK_SYSMON); break;
+        case B_EDIT_USERCONF: {
+            char p[200];
+            open_win_arg(WK_NOTES, mg_conf_user_path(p, sizeof p));
+            break;
+        }
+        case B_EDIT_SYSCONF: {
+            char p[200];
+            mg_conf_ensure_template();
+            open_win_arg(WK_NOTES, mg_conf_sys_path(p, sizeof p));
+            break;
+        }
+        case B_RELOAD_CONF: {
+            int n = mg_conf_load_all();
+            load_cfg();
+            layout_desktop();
+            toast("Reloaded mg.conf (%d setting%s applied)", n, n == 1 ? "" : "s");
+            break;
+        }
+        case B_CLEAR_MANUAL:
+            reg_del(HIVE_USER, "Manual/AccentHex");
+            reg_del(HIVE_USER, "Manual/DeskTopHex");
+            reg_del(HIVE_USER, "Manual/DeskBotHex");
+            reg_del(HIVE_USER, "Manual/WindowHex");
+            load_cfg();
+            toast("Cleared manual hex color overrides");
+            break;
+        case B_NET_DHCP: {
+            char msg[160];
+            if (net_dhcp(NULL, msg, sizeof msg) == 0) toast("DHCP: %s", msg);
+            else toast("DHCP failed: %s", msg);
+            break;
+        }
+        case B_NET_APPLY: {
+            char msg[160];
+            if (net_apply_registry(msg, sizeof msg) == 0) toast("Network: %s", msg);
+            else toast("%s", msg);
+            break;
+        }
+        case B_NET_CENTER: open_win(WK_NETCENTER); break;
         }
         break;
     }
@@ -1062,10 +1308,11 @@ static void row_activate(int ci, int ri, int dir) {
 
 static void open_cat(int c) {
     st.page = c; st.scroll = 0; st.sel = -1;
-    if (cats[c].n < 0) scan_apps();
+    if (cats[c].n == -1) scan_apps();
+    if (cats[c].n == -2) n_set_drvs = drv_scan(set_drvs, N(set_drvs));
     for (int i = 0; i < cat_nrows(c); i++) {
-        struct row r; char lab[48];
-        get_row(c, i, &r, lab);
+        struct row r; char lab[64], sub_b[128];
+        get_row(c, i, &r, lab, sub_b);
         if (selectable(&r)) { st.sel = i; break; }
     }
 }
@@ -1080,54 +1327,52 @@ static void draw_pill_right(int xr, int cy, const char *s, uint32_t fg, uint32_t
 static void settings_draw(int x, int y, int cw, int ch) {
     const struct pal *p = &cf.p;
     set_ui_clip(x, y, cw, ch);
-    gfx_rect(x, y, cw, ch, p->win);
+    if (cf.glass_mode == 3) gfx_rect(x, y, cw, ch, p->win);
 
     if (st.page < 0) {
         gfx_text(x + 20, y + 14, "Settings", cf.acc, 1, 1, cw - 40);
-        gfx_text(x + 20, y + 34, "Choose a category", p->muted, 0, 1, cw - 40);
+        gfx_text(x + 20, y + 34, "Themes, VaporGlass, smooth fonts, manual overrides, network & drivers", p->muted, 0, 1, cw - 40);
         int cols = cw >= 520 ? 2 : 1;
-        int gap = 12;
+        int gap = 10;
         int tw = (cw - 40 - (cols - 1) * gap) / cols;
-        int th = 62;
+        int th = 56;
         st.cols = cols;
         set_ui_clip(x, y + 58, cw, ch - 62);
         for (int i = 0; i < NCATS; i++) {
             int tx = x + 20 + (i % cols) * (tw + gap);
-            int ty = y + 60 + (i / cols) * (th + 10) - st.scroll * 24;
+            int ty = y + 60 + (i / cols) * (th + 8) - st.scroll * 24;
             if (ty + th < y + 58 || ty >= y + ch) continue;
             int hi = i == st.hsel || point_in(hover_x, hover_y, tx, ty, tw, th);
             uint32_t bg = hi ? p->sel : p->win_alt;
             gfx_rrect(tx, ty, tw, th, 8, bg);
             gfx_rrect_outline(tx, ty, tw, th, 8, hi ? cf.acc : p->border);
-            /* Element badge */
-            gfx_rrect(tx + 10, ty + 9, 44, 44, 6, p->win);
-            gfx_rrect_outline(tx + 10, ty + 9, 44, 44, 6, cf.acc);
+            gfx_rrect(tx + 10, ty + 8, 40, 40, 6, p->win);
+            gfx_rrect_outline(tx + 10, ty + 8, 40, 40, 6, cf.acc);
             int sw = gfx_text_width(cats[i].sym, 1);
-            gfx_text(tx + 10 + (44 - sw) / 2, ty + 23, cats[i].sym, cf.acc, 1, 1, 40);
-            gfx_text(tx + 66, ty + 13, cats[i].name, p->winfg, 1, 1, tw - 76);
-            gfx_text(tx + 66, ty + 33, cats[i].desc, p->muted, 0, 1, tw - 76);
+            gfx_text(tx + 10 + (40 - sw) / 2, ty + 20, cats[i].sym, cf.acc, 1, 1, 36);
+            gfx_text(tx + 60, ty + 10, cats[i].name, p->winfg, 1, 1, tw - 70);
+            gfx_text(tx + 60, ty + 30, cats[i].desc, p->muted, 0, 1, tw - 70);
             hot_add(tx, ty, tw, th, A_SET_CAT, i, 0);
         }
         return;
     }
 
-    /* Split view: left sidebar + right settings list */
-    int nav_w = 176;
-    gfx_rect(x, y, nav_w, ch, p->win_alt);
+    int nav_w = 168;
+    gfx_rect_alpha(x, y, nav_w, ch, p->win_alt, cf.glass_mode == 3 ? 255 : 155);
     gfx_vline(x + nav_w, y, ch, p->border);
     gfx_rrect(x + 8, y + 8, nav_w - 16, 26, 6, p->titleoff);
-    gfx_text(x + 18, y + 13, "\xe2\x80\xb9 All settings", p->winfg, 0, 1, nav_w - 28);
+    gfx_text(x + 16, y + 13, "\xe2\x80\xb9 All settings", p->winfg, 0, 1, nav_w - 24);
     hot_add(x + 8, y + 8, nav_w - 16, 26, A_SET_HOME, 0, 0);
 
     for (int i = 0; i < NCATS; i++) {
-        int ry = y + 42 + i * 30;
-        if (ry + 28 > y + ch) break;
+        int ry = y + 40 + i * 28;
+        if (ry + 26 > y + ch) break;
         int sel = i == st.page;
-        int hov = point_in(hover_x, hover_y, x + 6, ry, nav_w - 12, 28);
-        if (sel || hov) gfx_rrect(x + 6, ry, nav_w - 12, 28, 6, sel ? cf.acc : p->sel);
-        gfx_text(x + 14, ry + 6, cats[i].sym, sel ? cf.accfg : cf.acc, 1, 1, 24);
-        gfx_text(x + 42, ry + 6, cats[i].name, sel ? cf.accfg : p->winfg, sel, 1, nav_w - 52);
-        hot_add(x + 6, ry, nav_w - 12, 28, A_SET_CAT, i, 0);
+        int hov = point_in(hover_x, hover_y, x + 6, ry, nav_w - 12, 26);
+        if (sel || hov) gfx_rrect(x + 6, ry, nav_w - 12, 26, 6, sel ? cf.acc : p->sel);
+        gfx_text(x + 12, ry + 5, cats[i].sym, sel ? cf.accfg : cf.acc, 1, 1, 24);
+        gfx_text(x + 38, ry + 5, cats[i].name, sel ? cf.accfg : p->winfg, sel, 1, nav_w - 46);
+        hot_add(x + 6, ry, nav_w - 12, 26, A_SET_CAT, i, 0);
     }
 
     int x0 = x + nav_w + 18, pw = cw - nav_w - 36;
@@ -1138,14 +1383,14 @@ static void settings_draw(int x, int y, int cw, int ch) {
     set_ui_clip(x + nav_w + 1, y + 56, cw - nav_w - 1, ch - 58);
     int nr = cat_nrows(st.page);
     if (nr == 0) {
-        gfx_text(x0, y + 72, "Nothing installed yet. Install a program with: install FILE", p->muted, 0, 1, pw);
+        gfx_text(x0, y + 72, "No items found.", p->muted, 0, 1, pw);
         return;
     }
 
     int cur_y = y + 64 - st.scroll * 26;
     for (int i = 0; i < nr; i++) {
-        struct row r; char lab[48], val[160];
-        get_row(st.page, i, &r, lab);
+        struct row r; char lab[64], sub_b[128], val[160];
+        get_row(st.page, i, &r, lab, sub_b);
         int rh = r.kind == R_HEAD ? 30 : 48;
         if (cur_y + rh > y + 56 && cur_y < y + ch) {
             if (r.kind == R_HEAD) {
@@ -1164,6 +1409,9 @@ static void settings_draw(int x, int y, int cw, int ch) {
                         if (vw > max_px) vw = (max_px / 8) * 8;
                         gfx_text(xr - vw, cur_y + 6, val, cf.acc, 0, 1, max_px);
                     }
+                } else if (r.kind == R_DRV) {
+                    draw_pill_right(xr, midy, r.id ? "Active" : "Unbound",
+                                    r.id ? 0x0B1220 : 0xFFFFFF, r.id ? p->ok : p->bad, 1);
                 } else if (r.kind == R_TOGGLE || r.kind == R_APP) {
                     int on = r.kind == R_APP ? is_pinned(lab) : get_toggle(r.sys ? HIVE_SYSTEM : HIVE_USER, r.key, r.def);
                     draw_pill_right(xr, midy, r.kind == R_APP ? (on ? "Pinned" : "Pin") : (on ? "ON" : "OFF"),
@@ -1175,13 +1423,15 @@ static void settings_draw(int x, int y, int cw, int ch) {
                     draw_pill_right(xr, midy, s, p->winfg, p->titleoff, 0);
                 } else if (r.kind == R_TEXT) {
                     row_value(&r, val, sizeof val);
-                    if (strlen(val) > 20) { val[19] = '~'; val[20] = 0; }
-                    draw_pill_right(xr, midy, val[0] ? val : "(empty)", p->winfg, p->titleoff, 0);
+                    if (strlen(val) > 18) { val[17] = '~'; val[18] = 0; }
+                    draw_pill_right(xr, midy, val[0] ? val : "(default)", p->winfg, p->titleoff, 0);
                 } else if (r.kind == R_BUTTON) {
                     int danger = r.id == B_HALT || r.id == B_REBOOT || r.id == B_RESET;
-                    draw_pill_right(xr, midy,
-                                    r.id == B_REGEDIT ? "Open" : r.id == B_PASSWD ? "Change" : r.id == B_LOGOUT ? "Log out" : r.id == B_SETTIME ? "Set" : "Run",
-                                    danger ? 0xFFFFFF : cf.accfg, danger ? p->bad : cf.acc, 1);
+                    const char *blab = (r.id == B_REGEDIT || r.id == B_NET_CENTER || r.id == B_OPEN_SYSMON ||
+                                        r.id == B_EDIT_USERCONF || r.id == B_EDIT_SYSCONF) ? "Open" :
+                                       r.id == B_PASSWD ? "Change" : r.id == B_LOGOUT ? "Log out" :
+                                       r.id == B_SETTIME ? "Set" : "Apply";
+                    draw_pill_right(xr, midy, blab, danger ? 0xFFFFFF : cf.accfg, danger ? p->bad : cf.acc, 1);
                 }
                 if (selectable(&r)) hot_add(x0 - 6, cur_y, pw + 12, rh - 4, A_SET_ROW, i, 0);
             }
@@ -1204,8 +1454,8 @@ static void settings_key(int k, int ch) {
     if (k == GK_UP || k == GK_DOWN) {
         int d = k == GK_UP ? -1 : 1;
         for (int i = st.sel + d; i >= 0 && i < nr; i += d) {
-            struct row r; char lab[48];
-            get_row(st.page, i, &r, lab);
+            struct row r; char lab[64], sub_b[128];
+            get_row(st.page, i, &r, lab, sub_b);
             if (selectable(&r)) { st.sel = i; break; }
         }
         int vis_rows = (ch - 64) / 48;
@@ -1215,8 +1465,8 @@ static void settings_key(int k, int ch) {
         if (st.scroll < 0) st.scroll = 0;
     } else if (k == GK_LEFT || k == GK_RIGHT) {
         if (st.sel >= 0) {
-            struct row r; char lab[48];
-            get_row(st.page, st.sel, &r, lab);
+            struct row r; char lab[64], sub_b[128];
+            get_row(st.page, st.sel, &r, lab, sub_b);
             if (r.kind == R_CHOICE) row_activate(st.page, st.sel, k == GK_LEFT ? -1 : 1);
             else if (r.kind == R_TOGGLE || r.kind == R_APP) row_activate(st.page, st.sel, 1);
         }
@@ -1302,9 +1552,9 @@ static void build_tree(void) {
             struct tnode *t = &tn[ntn++];
             memset(t, 0, sizeof *t);
             t->hive = hv; t->depth = depth;
-            snprintf(t->path, sizeof t->path, "%s", path);
+            snprintf(t->path, sizeof t->path, "%.159s", path);
             const char *last = strrchr(path, '/');
-            snprintf(t->name, sizeof t->name, "%s", last ? last + 1 : path);
+            snprintf(t->name, sizeof t->name, "%.63s", last ? last + 1 : path);
             size_t pl = strlen(path);
             t->kids = i + 1 < nd && !strncmp(dirs_tmp[i + 1], path, pl) && dirs_tmp[i + 1][pl] == '/';
             t->open = exp_find(hv, path) >= 0;
@@ -1333,8 +1583,8 @@ static void build_values(void) {
 }
 
 static void reg_full_key(const struct tnode *t, const char *name, char *out, size_t n) {
-    if (t->path[0]) snprintf(out, n, "%s/%s", t->path, name);
-    else snprintf(out, n, "%s", name);
+    if (t->path[0]) snprintf(out, n, "%.90s/%.64s", t->path, name);
+    else snprintf(out, n, "%.155s", name);
 }
 static const char *reg_val_name(const struct tnode *t, int vi) {
     const char *key = reg_entry(t->hive, vlist[vi], NULL);
@@ -1346,12 +1596,11 @@ static void registry_draw(int x, int y, int cw, int ch) {
     build_tree();
     build_values();
     set_ui_clip(x, y, cw, ch);
-    gfx_rect(x, y, cw, ch, p->win);
+    if (cf.glass_mode == 3) gfx_rect(x, y, cw, ch, p->win);
 
     int lw = cw / 3 < 180 ? 180 : (cw / 3 > 250 ? 250 : cw / 3);
-    int foot_h = 26;
-    int body_h = ch - foot_h;
-    gfx_rect(x, y, lw, body_h, p->win_alt);
+    int foot_h = 26, body_h = ch - foot_h;
+    gfx_rect_alpha(x, y, lw, body_h, p->win_alt, cf.glass_mode == 3 ? 255 : 155);
     gfx_vline(x + lw, y, body_h, p->border);
 
     gfx_text(x + 12, y + 8, "Keys", cf.acc, 1, 1, lw - 20);
@@ -1510,7 +1759,7 @@ static void registry_key(int k) {
     }
 }
 
-/* ================= Window Chrome & Menus ================= */
+/* ================= VaporGlass Window Chrome & Menus ================= */
 
 static const char *const mn_settings[] = { "File", "View", NULL };
 static const char *const mi_set0[] = { "Home page", "Close window", NULL };
@@ -1524,15 +1773,20 @@ static const char *const mi_reg2[] = { "Expand all", "Collapse all", NULL };
 static const char *const mn_terminal[] = { "Shell", NULL };
 static const char *const mi_term0[] = { "Clear terminal", "Restart shell", "Close window", NULL };
 
+static const char *const mn_app_def[] = { "Window", NULL };
+static const char *const mi_app0[] = { "Maximize / Restore", "Minimize", "Close window", NULL };
+
 static const char *const *menu_names(int kind) {
     if (kind == WK_SETTINGS) return mn_settings;
     if (kind == WK_REGISTRY) return mn_registry;
-    return mn_terminal;
+    if (kind == WK_TERMINAL) return mn_terminal;
+    return mn_app_def;
 }
 static const char *const *menu_items(int kind, int m) {
     if (kind == WK_SETTINGS) return m == 0 ? mi_set0 : mi_set1;
     if (kind == WK_REGISTRY) return m == 0 ? mi_reg0 : m == 1 ? mi_reg1 : mi_reg2;
-    return mi_term0;
+    if (kind == WK_TERMINAL) return mi_term0;
+    return mi_app0;
 }
 
 static void close_win(struct win *w) {
@@ -1545,41 +1799,68 @@ static void close_win(struct win *w) {
     menu_win = 0;
 }
 
-static struct win *open_win(int kind) {
+static const char *kind_sym(int kind) {
+    switch (kind) {
+    case WK_SETTINGS:  return "St";
+    case WK_REGISTRY:  return "Rg";
+    case WK_TERMINAL:  return "Tm";
+    case WK_FILES:     return "Fl";
+    case WK_NOTES:     return "Nt";
+    case WK_CALC:      return "Ca";
+    case WK_CANVAS:    return "Cv";
+    case WK_SYSMON:    return "Sm";
+    case WK_NETCENTER: return "Nc";
+    case WK_MINES:     return "Gm";
+    default:           return "Mg";
+    }
+}
+
+static struct win *open_win_arg(int kind, const char *arg) {
     struct win *w = win_by_kind(kind);
     if (w) {
         w->minimized = 0;
         raise_win(w);
         if (kind == WK_TERMINAL && term.pty_fd < 0)
             term_start((w->w - 20) / 8, (w->h - TITLE_H - MENU_H - 16) / 16, NULL);
+        else if (kind >= WK_FILES && arg && arg[0]) {
+            int dw = w->w, dh = w->h;
+            apps_init_window(kind, arg, w->title, &dw, &dh);
+        }
         return w;
     }
     for (int i = 0; i < N(wins); i++) if (!wins[i].used) { w = &wins[i]; break; }
-    if (!w) return NULL;
+    if (!w) { toast("Too many open windows (close one first)"); return NULL; }
     memset(w, 0, sizeof *w);
     w->used = 1; w->id = next_id++; w->kind = kind;
+    snprintf(w->sym, sizeof w->sym, "%s", kind_sym(kind));
+
     int W = gfx_width(), dh = desk_y1 - desk_y0;
     if (kind == WK_SETTINGS) {
         snprintf(w->title, sizeof w->title, "Settings");
-        w->w = W - 80 < 760 ? W - 40 : 760;
-        w->h = dh - 60 < 500 ? dh - 24 : 500;
+        w->w = W - 80 < 780 ? W - 40 : 780;
+        w->h = dh - 50 < 510 ? dh - 24 : 510;
         st.page = -1; st.sel = -1; st.scroll = 0; st.hsel = 0;
         scan_apps();
     } else if (kind == WK_REGISTRY) {
         snprintf(w->title, sizeof w->title, "Registry Editor");
         w->w = W - 80 < 740 ? W - 40 : 740;
-        w->h = dh - 60 < 470 ? dh - 24 : 470;
+        w->h = dh - 50 < 470 ? dh - 24 : 470;
         nexp = 0; exp_set(HIVE_SYSTEM, "", 1); exp_set(HIVE_USER, "", 1);
         memset(&rg, 0, sizeof rg);
-    } else {
+    } else if (kind == WK_TERMINAL) {
         snprintf(w->title, sizeof w->title, "Terminal");
         w->w = W - 80 < 680 ? W - 40 : 680;
-        w->h = dh - 60 < 430 ? dh - 24 : 430;
+        w->h = dh - 50 < 430 ? dh - 24 : 430;
         if (term_start((w->w - 20) / 8, (w->h - TITLE_H - MENU_H - 16) / 16, NULL) < 0)
             toast("Could not open /dev/ptmx; check devpts mount");
+    } else {
+        int defw = 640, defh = 420;
+        apps_init_window(kind, arg, w->title, &defw, &defh);
+        w->w = defw; w->h = defh;
     }
-    w->x = (W - w->w) / 2 + nz * 22;
-    w->y = desk_y0 + (dh - w->h) / 2 + nz * 18;
+    int left_pad = (cf.desk_icons && W - w->w > 130) ? 52 : 0;
+    w->x = left_pad + (W - left_pad - w->w) / 2 + (nz % 5) * 38 - 54;
+    w->y = desk_y0 + (dh - w->h) / 2 + (nz % 5) * 30 - 36;
     clamp_win(w);
     zord[nz++] = w->id;
     return w;
@@ -1591,31 +1872,50 @@ static void draw_window(struct win *w, int active) {
     reset_ui_clip();
     hot_add(w->x, w->y, w->w, w->h, A_WINBODY, w->id, 0);
 
-    gfx_shadow(w->x, w->y, w->w, w->h, 8);
-    gfx_rrect(w->x, w->y, w->w, w->h, 8, p->win);
+    int rad = w->maximized ? 4 : cf.radius;
+    uint32_t rim = active ? cf.acc : p->border;
 
+    /* Magnesium VaporGlass outer shell (real frosted blur + mineral sheen + luminous rim) */
+    gfx_shadow(w->x, w->y, w->w, w->h, rad);
+    gfx_glass_panel(w->x, w->y, w->w, w->h, rad, p->win, cf.glass_alpha, cf.blur_r, rim, cf.sheen);
+
+    /* Translucent ionized titlebar (uniquely Magnesium: periodic element badge + pill controls) */
     uint32_t tbg = active ? cf.acc : p->titleoff;
+    int talpha = cf.glass_mode == 3 ? 255 : (active ? 190 : 140);
+    gfx_rrect_alpha(w->x + 1, w->y + 1, w->w - 2, TITLE_H, rad, tbg, talpha);
     uint32_t tfg = active ? cf.accfg : p->titlefgoff;
-    uint32_t bc  = active ? cf.acc : p->border;
 
-    gfx_rrect(w->x, w->y, w->w, TITLE_H, 8, tbg);
-    gfx_rect(w->x, w->y + TITLE_H - 8, w->w, 8, tbg);
-    gfx_text(w->x + 14, w->y + 8, w->title, tfg, 1, 1, w->w - 92);
+    /* Periodic symbol pill on left of header */
+    gfx_rrect_alpha(w->x + 9, w->y + 6, 28, 22, 5, active ? 0x09111F : p->win, active ? 185 : 180);
+    gfx_text(w->x + 15, w->y + 9, w->sym, active ? cf.acc : p->muted, 1, 1, 22);
+    gfx_text(w->x + 44, w->y + 9, w->title, tfg, 1, 1, w->w - 150);
 
-    /* Titlebar drag + window control buttons */
-    hot_add(w->x + 6, w->y, w->w - 76, TITLE_H, A_TITLE, w->id, 0);
-    int bx_close = w->x + w->w - 32, bx_min = w->x + w->w - 62, by = w->y + 5;
-    gfx_rrect(bx_min, by, 24, 22, 5, active ? 0x1E293B : p->win_alt);
+    hot_add(w->x + 6, w->y, w->w - 108, TITLE_H, A_TITLE, w->id, 0);
+
+    /* Minimize / Maximize / Close mineral pills */
+    int bx_close = w->x + w->w - 33;
+    int bx_max   = w->x + w->w - 63;
+    int bx_min   = w->x + w->w - 93;
+    int by = w->y + 6;
+
+    int hmin = point_in(hover_x, hover_y, bx_min, by, 25, 22);
+    gfx_rrect_alpha(bx_min, by, 25, 22, 6, hmin ? p->sel : 0x0F172A, active ? 175 : 140);
     gfx_text(bx_min + 8, by + 3, "\xe2\x80\x94", active ? 0xFFFFFF : p->winfg, 1, 1, 16);
-    hot_add(bx_min, by, 24, 22, A_WIN_MIN, w->id, 0);
+    hot_add(bx_min, by, 25, 22, A_WIN_MIN, w->id, 0);
 
-    gfx_rrect(bx_close, by, 24, 22, 5, p->bad);
-    gfx_text(bx_close + 8, by + 3, "\xc3\x97", 0xFFFFFF, 1, 1, 16);
-    hot_add(bx_close, by, 24, 22, A_WIN_CLOSE, w->id, 0);
+    int hmax = point_in(hover_x, hover_y, bx_max, by, 25, 22);
+    gfx_rrect_alpha(bx_max, by, 25, 22, 6, hmax ? p->sel : 0x0F172A, active ? 175 : 140);
+    gfx_box(bx_max + 8, by + 6, 9, 9, active ? 0xFFFFFF : p->winfg, 1);
+    hot_add(bx_max, by, 25, 22, A_WIN_MAX, w->id, 0);
+
+    int hcls = point_in(hover_x, hover_y, bx_close, by, 25, 22);
+    gfx_rrect(bx_close, by, 25, 22, 6, hcls ? 0xFF5555 : p->bad);
+    gfx_text(bx_close + 9, by + 3, "\xc3\x97", 0xFFFFFF, 1, 1, 16);
+    hot_add(bx_close, by, 25, 22, A_WIN_CLOSE, w->id, 0);
 
     /* Menu bar */
     int my = w->y + TITLE_H;
-    gfx_rect(w->x + 1, my, w->w - 2, MENU_H, p->win_alt);
+    gfx_rect_alpha(w->x + 1, my, w->w - 2, MENU_H, p->win_alt, cf.glass_mode == 3 ? 255 : 210);
     gfx_hline(w->x + 1, my + MENU_H - 1, w->w - 2, p->border);
     int mx = w->x + 10;
     const char *const *names = menu_names(w->kind);
@@ -1631,25 +1931,27 @@ static void draw_window(struct win *w, int active) {
     }
 
     /* Client content */
-    int cx = w->x + 2, cy = w->y + TITLE_H + MENU_H, cw = w->w - 4, ch = w->h - TITLE_H - MENU_H - 2;
+    int cx = w->x + 2, cy = w->y + TITLE_H + MENU_H, cw = w->w - 4, ch = w->h - TITLE_H - MENU_H - 3;
     if (w->kind == WK_SETTINGS) settings_draw(cx, cy, cw, ch);
     else if (w->kind == WK_REGISTRY) registry_draw(cx, cy, cw, ch);
-    else terminal_draw(cx, cy, cw, ch, active);
+    else if (w->kind == WK_TERMINAL) terminal_draw(cx, cy, cw, ch, active);
+    else apps_draw_window(w->kind, cx, cy, cw, ch, active);
 
     reset_ui_clip();
-    gfx_rrect_outline(w->x, w->y, w->w, w->h, 8, bc);
+    gfx_rrect_outline(w->x, w->y, w->w, w->h, rad, rim);
 
-    /* Resize grip lines in bottom-right corner + edge hotspots */
-    for (int g = 0; g < 3; g++) {
-        int off = 4 + g * 4;
-        gfx_hline(w->x + w->w - off - 2, w->y + w->h - 3, 2, bc);
-        gfx_vline(w->x + w->w - 3, w->y + w->h - off - 2, 2, bc);
+    if (!w->maximized) {
+        for (int g = 0; g < 3; g++) {
+            int off = 4 + g * 4;
+            gfx_hline(w->x + w->w - off - 2, w->y + w->h - 3, 2, rim);
+            gfx_vline(w->x + w->w - 3, w->y + w->h - off - 2, 2, rim);
+        }
+        hot_add(w->x, w->y + TITLE_H, 6, w->h - TITLE_H - 8, A_EDGE, w->id, 1);
+        hot_add(w->x + w->w - 6, w->y + TITLE_H, 6, w->h - TITLE_H - 8, A_EDGE, w->id, 2);
+        hot_add(w->x + 8, w->y + w->h - 6, w->w - 16, 6, A_EDGE, w->id, 4);
+        hot_add(w->x, w->y + w->h - 10, 10, 10, A_EDGE, w->id, 5);
+        hot_add(w->x + w->w - 12, w->y + w->h - 12, 12, 12, A_EDGE, w->id, 6);
     }
-    hot_add(w->x, w->y + TITLE_H, 6, w->h - TITLE_H - 8, A_EDGE, w->id, 1);
-    hot_add(w->x + w->w - 6, w->y + TITLE_H, 6, w->h - TITLE_H - 8, A_EDGE, w->id, 2);
-    hot_add(w->x + 8, w->y + w->h - 6, w->w - 16, 6, A_EDGE, w->id, 4);
-    hot_add(w->x, w->y + w->h - 10, 10, 10, A_EDGE, w->id, 5);
-    hot_add(w->x + w->w - 12, w->y + w->h - 12, 12, 12, A_EDGE, w->id, 6);
     cur_wid = 0;
 }
 
@@ -1662,7 +1964,7 @@ static void draw_dropdown(void) {
     hot_add(0, 0, W, H, A_MENUCLOSE, 0, 0);
 
     const char *const *items = menu_items(w->kind, menu_idx);
-    int n = 0, mw = 140;
+    int n = 0, mw = 152;
     for (; items[n]; n++) {
         int iw = gfx_text_width(items[n], 1) + 28;
         if (iw > mw) mw = iw;
@@ -1670,9 +1972,8 @@ static void draw_dropdown(void) {
     int mh = n * 26 + 8;
     int x = menu_x[menu_idx], y = w->y + TITLE_H + MENU_H;
     if (x + mw > W - 4) x = W - mw - 4;
-    gfx_shadow(x, y, mw, mh, 6);
-    gfx_rrect(x, y, mw, mh, 6, p->win);
-    gfx_rrect_outline(x, y, mw, mh, 6, cf.acc);
+    gfx_shadow(x, y, mw, mh, 7);
+    gfx_glass_panel(x, y, mw, mh, 7, p->win, cf.glass_alpha, cf.blur_r, cf.acc, cf.sheen);
     for (int i = 0; i < n; i++) {
         int iy = y + 4 + i * 26;
         int s = i == menu_sel || point_in(hover_x, hover_y, x + 4, iy, mw - 8, 24);
@@ -1690,19 +1991,26 @@ static void menu_action(struct win *w, int m, int i) {
         if (m == 0) { if (i == 0) reg_refresh(); else close_win(w); }
         else if (m == 1) { if (i == 0) reg_new_value(); else if (i == 1) reg_edit_value(); else if (i == 2) reg_delete_value(); else reg_delete_key(); }
         else reg_expand_all(i == 0);
-    } else {
+    } else if (w->kind == WK_TERMINAL) {
         if (i == 0) term_reset_grid();
         else if (i == 1) { term_stop(); term_start(term.cols, term.rows, NULL); }
+        else close_win(w);
+    } else {
+        if (i == 0) toggle_maximize(w);
+        else if (i == 1) w->minimized = 1;
         else close_win(w);
     }
 }
 
-/* ================= Start Menu (Periodic-Table Element Tiles) ================= */
+/* ================= Start Menu (Periodic-Table VaporGlass Launcher) ================= */
 
-enum { TL_TERMINAL, TL_SETTINGS, TL_REGISTRY, TL_DESKTOP, TL_CONSOLE, TL_LOGOUT, TL_RESTART, TL_SHUTDOWN, TL_APP };
+enum {
+    TL_PROGRAMS, TL_FILES, TL_NOTES, TL_CALC, TL_CANVAS, TL_SYSMON, TL_NETCENTER, TL_MINES,
+    TL_TERMINAL, TL_SETTINGS, TL_REGISTRY, TL_DESKTOP, TL_CONSOLE, TL_LOGOUT, TL_RESTART, TL_SHUTDOWN, TL_APP
+};
 struct tile { char sym[3], name[32]; int kind; char cmd[48]; };
-static struct tile tiles[110];
-static int ntiles, vis[110], nvis, ssel, sscroll, scols = 4;
+static struct tile tiles[128];
+static int ntiles, vis[128], nvis, ssel, sscroll, scols = 4;
 static char sq[32];
 
 static void add_tile(const char *sym, const char *name, int kind, const char *cmd) {
@@ -1722,16 +2030,26 @@ static void filter_tiles(void) {
 }
 static void build_tiles(void) {
     ntiles = 0;
-    add_tile("Tm", "Terminal", TL_TERMINAL, NULL);
-    add_tile("St", "Settings", TL_SETTINGS, NULL);
-    add_tile("Rg", "Registry", TL_REGISTRY, NULL);
-    add_tile("Ds", "Desktop", TL_DESKTOP, NULL);
-    add_tile("Cn", "Console", TL_CONSOLE, NULL);
-    add_tile("Lo", "Log out", TL_LOGOUT, NULL);
-    add_tile("Rs", "Restart", TL_RESTART, NULL);
-    add_tile("Sd", "Shut down", TL_SHUTDOWN, NULL);
+    add_tile("Pr", "Programs",       TL_PROGRAMS,  NULL);
+    add_tile("Fl", "Files",          TL_FILES,     NULL);
+    add_tile("Nt", "Notes",          TL_NOTES,     NULL);
+    add_tile("Ca", "Calculator",     TL_CALC,      NULL);
+    add_tile("Cv", "Canvas",         TL_CANVAS,    NULL);
+    add_tile("Nc", "Network Center", TL_NETCENTER, NULL);
+    add_tile("Sm", "System Monitor", TL_SYSMON,    NULL);
+    add_tile("Gm", "Mg Mines",       TL_MINES,     NULL);
+    add_tile("Tm", "Terminal",       TL_TERMINAL,  NULL);
+    add_tile("St", "Settings",       TL_SETTINGS,  NULL);
+    add_tile("Rg", "Registry",       TL_REGISTRY,  NULL);
+    add_tile("Ds", "Show Desktop",   TL_DESKTOP,   NULL);
+    add_tile("Cn", "Console",        TL_CONSOLE,   NULL);
+    add_tile("Lo", "Log out",        TL_LOGOUT,    NULL);
+    add_tile("Rs", "Restart",        TL_RESTART,   NULL);
+    add_tile("Sd", "Shut down",      TL_SHUTDOWN,  NULL);
+
     scan_apps();
     for (int i = 0; i < napps; i++) {
+        if (apps_kind_from_name(apps[i], NULL, NULL) > 0) continue; /* already featured above */
         char sym[3] = {
             (char)toupper((unsigned char)apps[i][0]),
             apps[i][1] ? (char)tolower((unsigned char)apps[i][1]) : ' ', 0
@@ -1743,7 +2061,7 @@ static void build_tiles(void) {
 }
 
 static void show_desktop(void) {
-    static int saved[6];
+    static int saved[MAXWINS];
     if (!desk_hidden) {
         int any = 0;
         for (int i = 0; i < N(wins); i++) {
@@ -1761,15 +2079,23 @@ static void launch_tile(int ti) {
     struct tile *t = &tiles[ti];
     start_open = 0;
     switch (t->kind) {
-    case TL_TERMINAL: open_win(WK_TERMINAL); desk_hidden = 0; break;
-    case TL_SETTINGS: open_win(WK_SETTINGS); desk_hidden = 0; break;
-    case TL_REGISTRY: open_win(WK_REGISTRY); desk_hidden = 0; break;
-    case TL_DESKTOP:  show_desktop(); break;
-    case TL_CONSOLE:  quit_code = GUI_TO_SHELL; break;
-    case TL_LOGOUT:   dlg_open(D_CONFIRM, P_C_LOGOUT, "Log out", "End this session?", NULL); break;
-    case TL_RESTART:  dlg_open(D_CONFIRM, P_C_REBOOT, "Restart", "Restart the computer now?", NULL); break;
-    case TL_SHUTDOWN: dlg_open(D_CONFIRM, P_C_HALT, "Shut down", "Power the computer off now?", NULL); break;
-    case TL_APP:      { char c[64]; snprintf(c, sizeof c, "%s", t->cmd); launch_external(c); } break;
+    case TL_PROGRAMS:  open_win_arg(WK_FILES, "/programs"); desk_hidden = 0; break;
+    case TL_FILES:     open_win(WK_FILES); desk_hidden = 0; break;
+    case TL_NOTES:     open_win(WK_NOTES); desk_hidden = 0; break;
+    case TL_CALC:      open_win(WK_CALC); desk_hidden = 0; break;
+    case TL_CANVAS:    open_win(WK_CANVAS); desk_hidden = 0; break;
+    case TL_SYSMON:    open_win(WK_SYSMON); desk_hidden = 0; break;
+    case TL_NETCENTER: open_win(WK_NETCENTER); desk_hidden = 0; break;
+    case TL_MINES:     open_win(WK_MINES); desk_hidden = 0; break;
+    case TL_TERMINAL:  open_win(WK_TERMINAL); desk_hidden = 0; break;
+    case TL_SETTINGS:  open_win(WK_SETTINGS); desk_hidden = 0; break;
+    case TL_REGISTRY:  open_win(WK_REGISTRY); desk_hidden = 0; break;
+    case TL_DESKTOP:   show_desktop(); break;
+    case TL_CONSOLE:   quit_code = GUI_TO_SHELL; break;
+    case TL_LOGOUT:    dlg_open(D_CONFIRM, P_C_LOGOUT, "Log out", "End this session?", NULL); break;
+    case TL_RESTART:   dlg_open(D_CONFIRM, P_C_REBOOT, "Restart", "Restart the computer now?", NULL); break;
+    case TL_SHUTDOWN:  dlg_open(D_CONFIRM, P_C_HALT, "Shut down", "Power the computer off now?", NULL); break;
+    case TL_APP:       { char c[64]; snprintf(c, sizeof c, "%s", t->cmd); ui_run_terminal_cmd(c); } break;
     }
 }
 
@@ -1779,7 +2105,7 @@ static void draw_start(void) {
     reset_ui_clip();
     hot_add(0, 0, W, H, A_STARTCLOSE, 0, 0);
 
-    int tile_w = 104, tile_h = 84, gap = 10;
+    int tile_w = 126, tile_h = 84, gap = 10;
     scols = (W - 40) / (tile_w + gap);
     if (scols > 4) scols = 4;
     if (scols < 2) scols = 2;
@@ -1792,8 +2118,9 @@ static void draw_start(void) {
     if (maxrows < 1) maxrows = 1;
     int vrows = rows < maxrows ? rows : maxrows;
     if (vrows < 1) vrows = 1;
-    int ph = 106 + vrows * tile_h + (vrows - 1) * gap;
-    int px = 8, py = cf.top ? desk_y0 + 6 : desk_y1 - ph - 6;
+    int ph = 108 + vrows * tile_h + (vrows - 1) * gap;
+    int px = cf.floating_bar ? 10 : 8;
+    int py = cf.top ? desk_y0 + 6 : desk_y1 - ph - 6;
 
     int srow = ssel / scols;
     if (srow < sscroll) sscroll = srow;
@@ -1801,22 +2128,20 @@ static void draw_start(void) {
     if (sscroll < 0) sscroll = 0;
 
     hot_add(px, py, pw, ph, A_NONE, 0, 0);
-    gfx_shadow(px, py, pw, ph, 10);
-    gfx_rrect(px, py, pw, ph, 10, p->win);
-    gfx_rrect_outline(px, py, pw, ph, 10, cf.acc);
+    gfx_shadow(px, py, pw, ph, cf.radius + 2);
+    gfx_glass_panel(px, py, pw, ph, cf.radius + 2, p->win, cf.glass_alpha, cf.blur_r + 2, cf.acc, cf.sheen);
 
-    /* Header & search box */
     gfx_rrect(px + 12, py + 10, 56, 26, 6, cf.acc);
     gfx_text(px + 18, py + 15, "12 Mg", cf.accfg, 1, 1, 48);
     gfx_textf(px + 78, py + 15, p->winfg, 1, 1, pw - 92, "%s %s", OS_NAME, OS_VERSION);
 
-    gfx_rrect(px + 12, py + 44, pw - 24, 28, 6, p->input_bg);
+    gfx_rrect_alpha(px + 12, py + 44, pw - 24, 28, 6, p->input_bg, 220);
     gfx_rrect_outline(px + 12, py + 44, pw - 24, 28, 6, p->border);
     if (sq[0]) {
         gfx_text(px + 22, py + 50, sq, p->winfg, 0, 1, pw - 44);
         gfx_rect(px + 22 + gfx_text_width(sq, 1), py + 49, 2, 18, cf.acc);
     } else {
-        gfx_text(px + 22, py + 50, "Type to search apps & tools...", p->muted, 0, 1, pw - 44);
+        gfx_text(px + 22, py + 50, "Search /programs, tools & settings...", p->muted, 0, 1, pw - 44);
     }
 
     for (int vi = sscroll * scols; vi < nvis; vi++) {
@@ -1826,34 +2151,55 @@ static void draw_start(void) {
         int tx = px + 12 + col * (tile_w + gap);
         int ty = py + 82 + row * (tile_h + gap);
         int s = vi == ssel || point_in(hover_x, hover_y, tx, ty, tile_w, tile_h);
-        uint32_t bg = s ? p->sel : p->win_alt;
-        uint32_t bc = s ? cf.acc : p->border;
-        gfx_rrect(tx, ty, tile_w, tile_h, 8, bg);
-        gfx_rrect_outline(tx, ty, tile_w, tile_h, 8, bc);
-        gfx_textf(tx + 8, ty + 6, p->muted, 0, 1, 32, "%d", vis[vi] + 1);
+        gfx_rrect_alpha(tx, ty, tile_w, tile_h, 8, s ? p->sel : p->win_alt, s ? 235 : 185);
+        gfx_rrect_outline(tx, ty, tile_w, tile_h, 8, s ? cf.acc : p->border);
+        gfx_textf(tx + 8, ty + 5, p->muted, 0, 1, 32, "%d", vis[vi] + 1);
         int symw = gfx_text_width(t->sym, 2);
-        gfx_text(tx + (tile_w - symw) / 2, ty + 20, t->sym, cf.acc, 1, 2, tile_w - 8);
+        gfx_text(tx + (tile_w - symw) / 2, ty + 19, t->sym, cf.acc, 1, 2, tile_w - 8);
         int nw = gfx_text_width(t->name, 1);
         int maxnw = tile_w - 12;
         int nx = nw < maxnw ? tx + (tile_w - nw) / 2 : tx + 6;
-        gfx_text(nx, ty + tile_h - 22, t->name, p->winfg, 0, 1, maxnw);
+        gfx_text(nx, ty + tile_h - 21, t->name, p->winfg, 0, 1, maxnw);
         hot_add(tx, ty, tile_w, tile_h, A_TILE, vi, 0);
     }
     if (nvis == 0) gfx_text(px + 20, py + 96, "No matching apps", p->muted, 0, 1, pw - 40);
-    gfx_text(px + 14, py + ph - 20, "Enter open  \xc2\xb7  Arrows navigate  \xc2\xb7  Esc close", p->muted, 0, 1, pw - 28);
+    gfx_text(px + 14, py + ph - 20, "Enter open  \xc2\xb7  Wheel/Arrows browse  \xc2\xb7  Esc close", p->muted, 0, 1, pw - 28);
 }
 
-/* ================= Taskbar ================= */
+/* ================= Taskbar (Floating VaporGlass Dock or Edge Bar) ================= */
 
 static const char *pin_label(const char *n, char *sym, int *kind_out) {
     if (!strcasecmp(n, "terminal")) { strcpy(sym, "Tm"); *kind_out = WK_TERMINAL; return "Terminal"; }
     if (!strcasecmp(n, "settings")) { strcpy(sym, "St"); *kind_out = WK_SETTINGS; return "Settings"; }
     if (!strcasecmp(n, "registry")) { strcpy(sym, "Rg"); *kind_out = WK_REGISTRY; return "Registry"; }
+    const char *asym = NULL, *alab = NULL;
+    int ak = apps_kind_from_name(n, &asym, &alab);
+    if (ak > 0) {
+        snprintf(sym, 3, "%s", asym);
+        *kind_out = ak;
+        return alab;
+    }
     sym[0] = (char)toupper((unsigned char)n[0]);
     sym[1] = n[1] ? (char)tolower((unsigned char)n[1]) : ' ';
     sym[2] = 0;
     *kind_out = 0;
     return n;
+}
+
+static const char *win_pin_key(int kind) {
+    switch (kind) {
+    case WK_TERMINAL:  return "terminal";
+    case WK_SETTINGS:  return "settings";
+    case WK_REGISTRY:  return "registry";
+    case WK_FILES:     return "files";
+    case WK_NOTES:     return "notes";
+    case WK_CALC:      return "calc";
+    case WK_CANVAS:    return "canvas";
+    case WK_SYSMON:    return "sysmon";
+    case WK_NETCENTER: return "netcenter";
+    case WK_MINES:     return "mines";
+    default:           return "";
+    }
 }
 
 static void toggle_open(int kind) {
@@ -1871,39 +2217,44 @@ static int npins;
 static void draw_taskbar(void) {
     const struct pal *p = &cf.p;
     int W = gfx_width(), H = gfx_height();
-    int y = cf.top ? 0 : H - BAR_H;
+    int margin_x = cf.floating_bar ? 10 : 0;
+    int margin_y = cf.floating_bar ? 5 : 0;
+    int bx = margin_x, bw_bar = W - 2 * margin_x;
+    int y = cf.top ? margin_y : H - BAR_H - margin_y;
+    int rad = cf.floating_bar ? (cf.radius > 12 ? 12 : cf.radius) : 0;
     reset_ui_clip();
     cur_wid = 0;
 
-    gfx_rect(0, y, W, BAR_H, p->bar);
-    gfx_hline(0, cf.top ? y + BAR_H - 1 : y, W, p->border);
+    if (cf.floating_bar) {
+        gfx_shadow(bx, y, bw_bar, BAR_H, rad);
+        gfx_glass_panel(bx, y, bw_bar, BAR_H, rad, p->bar, cf.glass_alpha, cf.blur_r, p->border, cf.sheen);
+    } else {
+        gfx_glass_panel(0, y, W, BAR_H, 0, p->bar, cf.glass_alpha, cf.blur_r, p->border, cf.sheen / 2);
+    }
 
     /* 12 Mg Start button */
-    gfx_rrect(6, y + 5, 68, BAR_H - 10, 6, cf.acc);
-    gfx_text(16, y + 11, "12 Mg", cf.accfg, 1, 1, 56);
-    hot_add(6, y + 4, 68, BAR_H - 8, A_START, 0, 0);
+    gfx_rrect(bx + 6, y + 6, 68, BAR_H - 12, 7, cf.acc);
+    gfx_text(bx + 16, y + 12, "12 Mg", cf.accfg, 1, 1, 56);
+    hot_add(bx + 6, y + 4, 68, BAR_H - 8, A_START, 0, 0);
 
-    int x = 82, right = W - 10;
+    int x = bx + 82, right = bx + bw_bar - 10;
 
-    /* Clock on far right */
     if (cf.clock) {
         char ck[80] = "";
         clock_str(ck, sizeof ck, 0);
         int cw = gfx_text_width(ck, 1);
         right -= cw + 14;
-        gfx_text(right + 6, y + 11, ck, p->barfg, 1, 1, cw + 8);
+        gfx_text(right + 6, y + 12, ck, p->barfg, 1, 1, cw + 8);
     }
 
-    /* Taskbar window control buttons */
     if (cf.controls) {
         right -= 96;
-        draw_button(right,      y + 6, 28, BAR_H - 12, "\xc3\x97", 0xFFFFFF, p->bad, A_CLOSE, 0, 0);
-        draw_button(right + 32, y + 6, 28, BAR_H - 12, "O", p->winfg, p->titleoff, A_DESKTOP, 0, 0);
-        draw_button(right + 64, y + 6, 28, BAR_H - 12, "\xe2\x80\x94", p->winfg, p->titleoff, A_HIDE, 0, 0);
+        draw_button(right,      y + 7, 28, BAR_H - 14, "\xc3\x97", 0xFFFFFF, p->bad, A_CLOSE, 0, 0);
+        draw_button(right + 32, y + 7, 28, BAR_H - 14, "O", p->winfg, p->titleoff, A_DESKTOP, 0, 0);
+        draw_button(right + 64, y + 7, 28, BAR_H - 14, "\xe2\x80\x94", p->winfg, p->titleoff, A_HIDE, 0, 0);
         right -= 8;
     }
 
-    /* Pinned apps */
     npins = 0;
     char buf[256];
     snprintf(buf, sizeof buf, "%s", cf.pinned);
@@ -1914,61 +2265,225 @@ static void draw_taskbar(void) {
 
     struct win *act = active_win();
     for (int i = 0; i < npins; i++) {
-        char sym[3];
+        char sym[4];
         int kind = 0;
         const char *lab = pin_label(pins[i], sym, &kind);
         struct win *w = kind ? win_by_kind(kind) : NULL;
         const char *disp = cf.labels ? lab : sym;
-        int bw = gfx_text_width(disp, 1) + 24;
+        int bw = gfx_text_width(disp, 1) + 22;
         if (x + bw > right) break;
-        int hov = point_in(hover_x, hover_y, x, y + 5, bw, BAR_H - 10);
-        uint32_t bg = w ? (w == act ? p->sel : p->titleoff) : (hov ? p->win_alt : p->bar);
-        uint32_t fg = w && w == act ? cf.acc : p->barfg;
-        gfx_rrect(x, y + 5, bw, BAR_H - 10, 6, bg);
+        int hov = point_in(hover_x, hover_y, x, y + 6, bw, BAR_H - 12);
+        if (w || hov) {
+            uint32_t bg = w ? (w == act ? p->sel : p->titleoff) : p->win_alt;
+            gfx_rrect_alpha(x, y + 6, bw, BAR_H - 12, 6, bg, 210);
+        }
         if (w) gfx_rect(x + 8, y + BAR_H - 6, bw - 16, 2, w == act ? cf.acc : p->muted);
-        gfx_text(x + 12, y + 11, disp, fg, w == act, 1, bw - 16);
+        gfx_text(x + 11, y + 12, disp, w && w == act ? cf.acc : p->barfg, w == act, 1, bw - 14);
         hot_add(x, y + 4, bw, BAR_H - 8, A_PIN, i, 0);
-        x += bw + 6;
+        x += bw + 5;
     }
 
-    /* Open windows that aren't pinned */
     for (int i = 0; i < N(wins); i++) {
         if (!wins[i].used) continue;
-        const char *pname = wins[i].kind == WK_TERMINAL ? "terminal" :
-                            wins[i].kind == WK_SETTINGS ? "settings" : "registry";
-        if (is_pinned(pname)) continue;
-        int bw = gfx_text_width(wins[i].title, 1) + 24;
+        const char *pk = win_pin_key(wins[i].kind);
+        if (pk[0] && is_pinned(pk)) continue;
+        if (wins[i].kind == WK_FILES && is_pinned("programs")) continue;
+        int bw = gfx_text_width(wins[i].title, 1) + 22;
         if (x + bw > right) break;
         int is_a = &wins[i] == act;
-        gfx_rrect(x, y + 5, bw, BAR_H - 10, 6, is_a ? p->sel : p->titleoff);
+        gfx_rrect_alpha(x, y + 6, bw, BAR_H - 12, 6, is_a ? p->sel : p->titleoff, 215);
         gfx_rect(x + 8, y + BAR_H - 6, bw - 16, 2, is_a ? cf.acc : p->muted);
-        gfx_text(x + 12, y + 11, wins[i].title, is_a ? cf.acc : p->barfg, is_a, 1, bw - 16);
+        gfx_text(x + 11, y + 12, wins[i].title, is_a ? cf.acc : p->barfg, is_a, 1, bw - 14);
         hot_add(x, y + 4, bw, BAR_H - 8, A_TASKWIN, wins[i].id, 0);
-        x += bw + 6;
+        x += bw + 5;
     }
 }
 
-/* ================= Desktop Background & Full Scene Render ================= */
+/* ================= Wallpaper Generator (Aurora, Nebula, Prism, Gradient) ================= */
+
+static inline uint32_t add_rgb_clamped(uint32_t base, uint32_t glow, int weight) {
+    if (weight <= 0) return base;
+    int r = (int)((base >> 16) & 255) + (((int)((glow >> 16) & 255) * weight) >> 8);
+    int g = (int)((base >> 8) & 255)  + (((int)((glow >> 8) & 255) * weight) >> 8);
+    int b = (int)(base & 255)         + (((int)(glow & 255) * weight) >> 8);
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+static void rebuild_wallpaper_cache(int W, int H) {
+    if (W <= 0 || H <= 0) return;
+    if (wp_cache && wp_w == W && wp_h == H && wp_pat == cf.bgpat &&
+        wp_top == cf.p.desk_top && wp_bot == cf.p.desk_bot && wp_acc == cf.acc)
+        return;
+
+    free(wp_cache);
+    wp_cache = malloc((size_t)(W * H) * sizeof(uint32_t));
+    if (!wp_cache) return;
+    wp_w = W; wp_h = H; wp_pat = cf.bgpat;
+    wp_top = cf.p.desk_top; wp_bot = cf.p.desk_bot; wp_acc = cf.acc;
+
+    int r0 = (wp_top >> 16) & 255, g0 = (wp_top >> 8) & 255, b0 = wp_top & 255;
+    int r1 = (wp_bot >> 16) & 255, g1 = (wp_bot >> 8) & 255, b1 = wp_bot & 255;
+    int denom = H > 1 ? H - 1 : 1;
+
+    for (int y = 0; y < H; y++) {
+        uint32_t base = cf.bgpat == 5 ? wp_top :
+                        (((uint32_t)(r0 + (r1 - r0) * y / denom) << 16) |
+                         ((uint32_t)(g0 + (g1 - g0) * y / denom) << 8) |
+                         (uint32_t)(b0 + (b1 - b0) * y / denom));
+        uint32_t *row = &wp_cache[y * W];
+        for (int x = 0; x < W; x++) row[x] = base;
+    }
+
+    if (cf.bgpat == 0) {
+        /* Aurora: organic smooth S-curve luminous mineral ribbons */
+        uint32_t c2 = 0x2DD4BFu;
+        for (int x = 0; x < W; x++) {
+            /* Normalized u in [-256, 256]; smooth cubic wave u*(3*256^2 - u^2) */
+            long long u = (long long)x * 512 / (W > 1 ? W - 1 : 1) - 256;
+            long long s1 = (u * (3LL * 65536 - u * u)) / (2LL * 65536); /* [-256..256] */
+            int cy1 = (H * 42) / 100 + (int)((s1 * H) / 1500);
+            long long u2 = ((long long)(W - 1 - x) * 512) / (W > 1 ? W - 1 : 1) - 256;
+            long long s2 = (u2 * (3LL * 65536 - u2 * u2)) / (2LL * 65536);
+            int cy2 = (H * 58) / 100 - (int)((s2 * H) / 1700);
+            for (int y = 0; y < H; y++) {
+                int d1 = abs(y - cy1);
+                if (d1 < 150) {
+                    int w = ((150 - d1) * (150 - d1) * 82) / (150 * 150);
+                    wp_cache[y * W + x] = add_rgb_clamped(wp_cache[y * W + x], wp_acc, w);
+                }
+                int d2 = abs(y - cy2);
+                if (d2 < 125) {
+                    int w = ((125 - d2) * (125 - d2) * 62) / (125 * 125);
+                    wp_cache[y * W + x] = add_rgb_clamped(wp_cache[y * W + x], c2, w);
+                }
+            }
+        }
+    } else if (cf.bgpat == 2) {
+        /* Nebula: soft glowing radial orbs */
+        int cx1 = (W * 28) / 100, cy1 = (H * 36) / 100, rad1 = (H * 46) / 100;
+        int cx2 = (W * 74) / 100, cy2 = (H * 64) / 100, rad2 = (H * 42) / 100;
+        int r1sq = rad1 * rad1 + 1, r2sq = rad2 * rad2 + 1;
+        for (int y = 0; y < H; y++) {
+            uint32_t *row = &wp_cache[y * W];
+            for (int x = 0; x < W; x++) {
+                int d1 = (x - cx1) * (x - cx1) + (y - cy1) * (y - cy1);
+                if (d1 < r1sq) {
+                    int w = (int)(((long long)(r1sq - d1) * 95LL) / r1sq);
+                    row[x] = add_rgb_clamped(row[x], wp_acc, w);
+                }
+                int d2 = (x - cx2) * (x - cx2) + (y - cy2) * (y - cy2);
+                if (d2 < r2sq) {
+                    int w = (int)(((long long)(r2sq - d2) * 75LL) / r2sq);
+                    row[x] = add_rgb_clamped(row[x], 0xC084FCu, w);
+                }
+            }
+        }
+    } else if (cf.bgpat == 3) {
+        /* Prism: diagonal crystalline light facets */
+        for (int y = 0; y < H; y++) {
+            uint32_t *row = &wp_cache[y * W];
+            for (int x = 0; x < W; x++) {
+                int u = (x + y * 2) % 260;
+                int v = (x * 2 - y + 2000) % 310;
+                if (u < 90) row[x] = add_rgb_clamped(row[x], wp_acc, ((90 - u) * 38) / 90);
+                if (v < 70) row[x] = add_rgb_clamped(row[x], 0xFFFFFFu, ((70 - v) * 20) / 70);
+            }
+        }
+    } else if (cf.bgpat == 4) {
+        /* Grid */
+        for (int y = 0; y < H; y++) {
+            uint32_t *row = &wp_cache[y * W];
+            for (int x = 0; x < W; x++) {
+                if (x % 32 == 0 || y % 32 == 0)
+                    row[x] = add_rgb_clamped(row[x], cf.p.border, 70);
+            }
+        }
+    }
+}
 
 static void draw_wallpaper(void) {
-    const struct pal *p = &cf.p;
     int W = gfx_width(), H = gfx_height();
     reset_ui_clip();
-    if (cf.bgpat == 3) gfx_rect(0, 0, W, H, p->desk_top);
-    else gfx_gradient_v(0, 0, W, H, p->desk_top, p->desk_bot);
+    rebuild_wallpaper_cache(W, H);
+    if (!wp_cache) {
+        gfx_gradient_v(0, 0, W, H, cf.p.desk_top, cf.p.desk_bot);
+        return;
+    }
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) gfx_put(x, y, wp_cache[y * W + x]);
+    }
+}
 
-    if (cf.bgpat == 1) {
-        for (int y = desk_y0 + 16; y < desk_y1; y += 28)
-            for (int x = 16; x < W; x += 28) {
-                gfx_put(x, y, p->border);
-                gfx_put(x + 1, y, p->border);
-                gfx_put(x, y + 1, p->border);
-            }
-    } else if (cf.bgpat == 2) {
-        for (int y = desk_y0 + 32; y < desk_y1; y += 32)
-            gfx_rect_alpha(0, y, W, 1, p->border, 70);
-        for (int x = 32; x < W; x += 32)
-            gfx_rect_alpha(x, desk_y0, 1, desk_y1 - desk_y0, p->border, 70);
+/* ================= Desktop Shortcut Icons & Right-Click Context Menu ================= */
+
+static const struct { const char *sym, *label; int kind; const char *arg; } desk_shortcuts[] = {
+    { "Pr", "Programs", WK_FILES,     "/programs" },
+    { "Nt", "Notes",    WK_NOTES,     NULL },
+    { "Ca", "Calc",     WK_CALC,      NULL },
+    { "Cv", "Canvas",   WK_CANVAS,    NULL },
+    { "Nc", "Network",  WK_NETCENTER, NULL },
+    { "Sm", "Monitor",  WK_SYSMON,    NULL },
+    { "Tm", "Terminal", WK_TERMINAL,  NULL },
+};
+
+static void draw_desktop_icons(void) {
+    if (!cf.desk_icons) return;
+    const struct pal *p = &cf.p;
+    reset_ui_clip();
+    cur_wid = 0;
+    int ix = 16, iy = desk_y0 + 14;
+    int iw = 76, ih = 66, gap = 10;
+
+    for (int i = 0; i < N(desk_shortcuts); i++) {
+        if (iy + ih > desk_y1 - 8) {
+            iy = desk_y0 + 14;
+            ix += iw + 12;
+        }
+        int hov = point_in(hover_x, hover_y, ix, iy, iw, ih);
+        gfx_rrect_alpha(ix, iy, iw, ih, 8, hov ? p->sel : p->win, hov ? 205 : 135);
+        gfx_rrect_outline(ix, iy, iw, ih, 8, hov ? cf.acc : p->border);
+        int sw = gfx_text_width(desk_shortcuts[i].sym, 2);
+        gfx_text(ix + (iw - sw) / 2, iy + 8, desk_shortcuts[i].sym, cf.acc, 1, 2, iw - 8);
+        int lw = gfx_text_width(desk_shortcuts[i].label, 1);
+        gfx_text(ix + (iw - lw) / 2, iy + 44, desk_shortcuts[i].label, p->winfg, 0, 1, iw - 6);
+        hot_add(ix, iy, iw, ih, A_DESK_ICON, i, 0);
+        iy += ih + gap;
+    }
+}
+
+static const char *const ctx_labels[] = {
+    "Open /programs folder",
+    "Open Terminal",
+    "Next Theme Preset",
+    "Toggle VaporGlass",
+    "Edit ~/.mg.conf (Manual)",
+    "Display & Theme Settings",
+    NULL
+};
+
+static void draw_context_menu(void) {
+    if (!ctx_open) return;
+    int W = gfx_width(), H = gfx_height();
+    reset_ui_clip();
+    cur_wid = 0;
+    hot_add(0, 0, W, H, A_CTX_CLOSE, 0, 0);
+
+    int mw = 224, mh = 6 * 28 + 10;
+    int x = ctx_x, y = ctx_y;
+    if (x + mw > W - 8) x = W - mw - 8;
+    if (y + mh > H - 8) y = H - mh - 8;
+
+    gfx_shadow(x, y, mw, mh, 8);
+    gfx_glass_panel(x, y, mw, mh, 8, cf.p.win, cf.glass_alpha, cf.blur_r + 2, cf.acc, cf.sheen);
+    for (int i = 0; ctx_labels[i]; i++) {
+        int iy = y + 5 + i * 28;
+        int hov = point_in(hover_x, hover_y, x + 5, iy, mw - 10, 25);
+        if (hov) gfx_rrect(x + 5, iy, mw - 10, 25, 5, cf.acc);
+        gfx_text(x + 14, iy + 4, ctx_labels[i], hov ? cf.accfg : cf.p.winfg, hov, 1, mw - 24);
+        hot_add(x + 5, iy, mw - 10, 25, A_CTX_ITEM, i, 0);
     }
 }
 
@@ -1978,6 +2493,7 @@ static void render_desktop(void) {
     nhots = 0; cur_wid = 0;
 
     draw_wallpaper();
+    draw_desktop_icons();
 
     int anyvis = 0;
     struct win *act = active_win();
@@ -1992,8 +2508,8 @@ static void render_desktop(void) {
         const struct gfx_info *gi = gfx_get_info();
         char h1[120], h2[140], h3[160];
         snprintf(h1, sizeof h1, "%s %s", OS_NAME, OS_VERSION_LONG);
-        snprintf(h2, sizeof h2, "Click 12 Mg or press Ctrl+G to open the Start menu");
-        snprintf(h3, sizeof h3, "%s  \xc2\xb7  %dx%d", gi->desc, gi->width, gi->height);
+        snprintf(h2, sizeof h2, "Click 12 Mg, open Programs (/programs), or right-click desktop");
+        snprintf(h3, sizeof h3, "%s  \xc2\xb7  %dx%d  \xc2\xb7  VaporGlass", gi->desc, gi->width, gi->height);
         int cy = (desk_y0 + desk_y1) / 2;
         gfx_text((W - gfx_text_width(h1, 2)) / 2, cy - 42, h1, cf.acc, 1, 2, W - 32);
         gfx_text((W - gfx_text_width(h2, 1)) / 2, cy + 4, h2, p->winfg, 0, 1, W - 32);
@@ -2003,18 +2519,18 @@ static void render_desktop(void) {
     draw_taskbar();
     if (start_open) draw_start();
     if (menu_win) draw_dropdown();
+    if (ctx_open) draw_context_menu();
     draw_dialog();
 
     if (toast_msg[0] && time(NULL) < toast_until) {
         int tw = gfx_text_width(toast_msg, 1) + 32;
         if (tw > W - 24) tw = W - 24;
         int tx = (W - tw) / 2;
-        int ty = cf.top ? H - 44 : BAR_H + 12;
+        int ty = cf.top ? H - 46 : BAR_H + 14;
         reset_ui_clip();
         gfx_shadow(tx, ty, tw, 32, 8);
-        gfx_rrect(tx, ty, tw, 32, 8, 0x1E293B);
-        gfx_rrect_outline(tx, ty, tw, 32, 8, cf.acc);
-        gfx_text(tx + 16, ty + 8, toast_msg, 0xFFFFFF, 1, 1, tw - 32);
+        gfx_glass_panel(tx, ty, tw, 32, 8, p->win, 225, cf.blur_r, cf.acc, cf.sheen);
+        gfx_text(tx + 16, ty + 8, toast_msg, p->winfg, 1, 1, tw - 32);
     }
 }
 
@@ -2057,7 +2573,7 @@ static void dialog_ok(void) {
     case P_REG_NEWNAME: {
         if (!d.buf[0]) break;
         char full[160], msg[200];
-        snprintf(full, sizeof full, "%s%s%s", pend_key, pend_key[0] ? "/" : "", d.buf);
+        snprintf(full, sizeof full, "%.90s%s%.64s", pend_key, pend_key[0] ? "/" : "", d.buf);
         snprintf(pend_key, sizeof pend_key, "%s", full);
         snprintf(msg, sizeof msg, "Value for %s:", pend_key);
         dlg_open(D_INPUT, P_REG_NEWVAL, "New value", msg, "");
@@ -2105,6 +2621,7 @@ static void dialog_ok(void) {
         break;
     }
     load_cfg();
+    layout_desktop();
 }
 
 static void edit_buf_key(char *buf, size_t cap, int *len, int *cur, int k) {
@@ -2140,15 +2657,16 @@ static void dialog_key(int k) {
 
 static void do_drag(int x, int y) {
     struct win *w = win_by_id(drg.wid);
-    if (!w) { drg.on = 0; return; }
+    if (!w || w->maximized) { drg.on = 0; return; }
     if (drg.mode == 1) { w->x = x - drg.ox; w->y = y - drg.oy; clamp_win(w); return; }
     int W = gfx_width();
+    int minw = w->kind == WK_CALC ? 280 : 340;
     int dx = x - drg.sx, dy = y - drg.sy;
     int nx = drg.wx, nw = drg.ww, nh = drg.wh;
     if (drg.edge & 1) { nx = drg.wx + dx; nw = drg.ww - dx; }
     if (drg.edge & 2) nw = drg.ww + dx;
     if (drg.edge & 4) nh = drg.wh + dy;
-    if (nw < 340) { if (drg.edge & 1) nx -= 340 - nw; nw = 340; }
+    if (nw < minw) { if (drg.edge & 1) nx -= minw - nw; nw = minw; }
     if (nh < 220) nh = 220;
     if (nx < 0) { nw += nx; nx = 0; }
     if (nx + nw > W) nw = W - nx;
@@ -2163,7 +2681,44 @@ static void pin_click(int i) {
     if (!strcasecmp(name, "terminal")) toggle_open(WK_TERMINAL);
     else if (!strcasecmp(name, "settings")) toggle_open(WK_SETTINGS);
     else if (!strcasecmp(name, "registry")) toggle_open(WK_REGISTRY);
-    else launch_external(name);
+    else {
+        int wk = apps_kind_from_name(name, NULL, NULL);
+        if (wk > 0) toggle_open(wk);
+        else ui_run_terminal_cmd(name);
+    }
+}
+
+static void handle_ctx_action(int idx) {
+    ctx_open = 0;
+    switch (idx) {
+    case 0: open_win_arg(WK_FILES, "/programs"); break;
+    case 1: open_win(WK_TERMINAL); break;
+    case 2: {
+        int next = (cf.theme_idx + 1) % 8;
+        char tname[32];
+        opt_get(THEME_LIST, next, tname, sizeof tname);
+        reg_set(HIVE_USER, "Display/Theme", tname);
+        load_cfg();
+        toast("Theme: %s", tname);
+        break;
+    }
+    case 3: {
+        const char *next = cf.glass_mode == 0 ? "Solid" : "VaporGlass";
+        reg_set(HIVE_USER, "Display/Glass", next);
+        load_cfg();
+        toast("Glass mode: %s", next);
+        break;
+    }
+    case 4: {
+        char p[200];
+        open_win_arg(WK_NOTES, mg_conf_user_path(p, sizeof p));
+        break;
+    }
+    case 5:
+        open_win(WK_SETTINGS);
+        open_cat(1);
+        break;
+    }
 }
 
 static int on_mouse(const struct gfx_mouse *mev) {
@@ -2187,34 +2742,73 @@ static int on_mouse(const struct gfx_mouse *mev) {
             else if (w->kind == WK_REGISTRY) {
                 if (x < w->x + w->w / 3) { rg.tsel += d; rg.vsel = 0; if (rg.tsel < 0) rg.tsel = 0; }
                 else { rg.vsel += d; if (rg.vsel < 0) rg.vsel = 0; }
+            } else if (w->kind >= WK_FILES) {
+                apps_on_wheel(w->kind, d);
             }
             return 1;
         }
         return 0;
     }
 
+    struct win *act = active_win();
+    if (act && act->kind >= WK_FILES &&
+        apps_on_mouse_drag(act->kind, act->x + 2, act->y + TITLE_H + MENU_H,
+                           act->w - 4, act->h - TITLE_H - MENU_H - 3, mev)) {
+        return 1;
+    }
+
     if (mev->kind == GM_MOVE) {
         if (drg.on && (mev->buttons_down & 1)) { do_drag(x, y); return 1; }
-        /* Redraw UI only if hover moved onto/off interactive controls */
         const struct hot *h0 = hot_at(prev_hx, prev_hy);
         const struct hot *h1 = hot_at(x, y);
         return h0 != h1;
     }
 
-    if (mev->btn != 0) return 0;
     if (mev->kind == GM_RELEASE) { drg.on = 0; return 0; }
 
+    /* Right-click support: cell flagging in Mg Mines, or Desktop context menu */
+    if (mev->btn == 2 && mev->kind == GM_PRESS) {
+        const struct hot *rh = hot_at(x, y);
+        if (rh && rh->act == ACT_MINE_CELL) {
+            apps_on_hotspot(rh->act, rh->a, rh->b, x, y, 2);
+            return 1;
+        }
+        if (!rh && y >= desk_y0 && y < desk_y1) {
+            ctx_open = 1; ctx_x = x; ctx_y = y; start_open = 0; menu_win = 0;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (mev->btn != 0) return 0;
+
     const struct hot *h = hot_at(x, y);
-    if (!h) return 1;
+    if (!h) {
+        if (ctx_open) { ctx_open = 0; return 1; }
+        return 0;
+    }
     struct hot hh = *h;
     struct win *w = hh.wid ? win_by_id(hh.wid) : NULL;
     if (w) raise_win(w);
 
+    if (hh.act >= ACT_APP_BASE) {
+        apps_on_hotspot(hh.act, hh.a, hh.b, x, y, mev->btn);
+        return 1;
+    }
+
     switch (hh.act) {
-    case A_START: start_open = !start_open; if (start_open) { build_tiles(); menu_win = 0; } break;
+    case A_START: start_open = !start_open; ctx_open = 0; if (start_open) { build_tiles(); menu_win = 0; } break;
     case A_STARTCLOSE: start_open = 0; break;
     case A_TILE: if (hh.a < nvis) launch_tile(vis[hh.a]); break;
     case A_PIN: pin_click(hh.a); break;
+    case A_DESK_ICON:
+        if (hh.a >= 0 && hh.a < N(desk_shortcuts)) {
+            open_win_arg(desk_shortcuts[hh.a].kind, desk_shortcuts[hh.a].arg);
+            desk_hidden = 0;
+        }
+        break;
+    case A_CTX_ITEM: handle_ctx_action(hh.a); break;
+    case A_CTX_CLOSE: ctx_open = 0; break;
     case A_TASKWIN: {
         struct win *t = win_by_id(hh.a);
         if (t) {
@@ -2230,8 +2824,15 @@ static int on_mouse(const struct gfx_mouse *mev) {
     case A_HIDE: { struct win *a = active_win(); if (a) { a->minimized = 1; desk_hidden = 0; } break; }
     case A_WIN_CLOSE: if (w) close_win(w); break;
     case A_WIN_MIN: if (w) { w->minimized = 1; desk_hidden = 0; } break;
-    case A_TITLE: if (w) drg = (struct drag){ 1, 1, w->id, x - w->x, y - w->y, 0, x, y, w->x, w->y, w->w, w->h }; break;
-    case A_EDGE:  if (w) drg = (struct drag){ 1, 2, w->id, 0, 0, hh.b, x, y, w->x, w->y, w->w, w->h }; break;
+    case A_WIN_MAX: if (w) toggle_maximize(w); break;
+    case A_TITLE:
+        if (w && !w->maximized)
+            drg = (struct drag){ 1, 1, w->id, x - w->x, y - w->y, 0, x, y, w->x, w->y, w->w, w->h };
+        break;
+    case A_EDGE:
+        if (w && !w->maximized)
+            drg = (struct drag){ 1, 2, w->id, 0, 0, hh.b, x, y, w->x, w->y, w->w, w->h };
+        break;
     case A_MENU:
         if (menu_win == hh.a && menu_idx == hh.b) menu_win = 0;
         else { menu_win = hh.a; menu_idx = hh.b; menu_sel = 0; start_open = 0; }
@@ -2287,6 +2888,7 @@ static void start_key(int k) {
 
 static void on_key(int k) {
     toast_msg[0] = 0;
+    if (ctx_open && k == 27) { ctx_open = 0; return; }
     if (dlg.type) { dialog_key(k); return; }
     if (start_open) { start_key(k); return; }
     struct win *a = active_win();
@@ -2314,7 +2916,7 @@ static void on_key(int k) {
 
     if (mode_move || mode_resize) {
         if (k == 13 || k == 27) { mode_move = mode_resize = 0; return; }
-        if (a) {
+        if (a && !a->maximized) {
             int step = 16;
             if (mode_move) {
                 if (k == GK_LEFT) a->x -= step; else if (k == GK_RIGHT) a->x += step;
@@ -2328,7 +2930,6 @@ static void on_key(int k) {
         return;
     }
 
-    /* Global desktop hotkeys */
     switch (k) {
     case CK('G'): case GK_F1: start_open = 1; build_tiles(); return;
     case CK('N'): case GK_F6: next_window(); return;
@@ -2338,8 +2939,7 @@ static void on_key(int k) {
     case GK_F10:  if (a) { menu_win = a->id; menu_idx = 0; menu_sel = 0; } return;
     }
 
-    /* When Terminal isn't focused, keep Ctrl+E / Ctrl+D / Ctrl+T / Ctrl+R shortcuts active */
-    if (!a || a->kind != WK_TERMINAL) {
+    if (!a || (a->kind != WK_TERMINAL && a->kind != WK_NOTES)) {
         switch (k) {
         case CK('E'): if (a) close_win(a); return;
         case CK('D'): show_desktop(); return;
@@ -2356,33 +2956,89 @@ static void on_key(int k) {
             term_start((a->w - 20) / 8, (a->h - TITLE_H - MENU_H - 16) / 16, NULL);
         else
             term_send_key(k);
+    } else if (a->kind >= WK_FILES) {
+        apps_on_key(a->kind, k);
     }
+}
+
+static int poll_desktop_ipc(void) {
+    int fd = open("/tmp/.mg-desktop.ipc", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    char buf[1024];
+    ssize_t n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    unlink("/tmp/.mg-desktop.ipc");
+    if (n <= 0) return 0;
+    buf[n] = 0;
+
+    int changed = 0;
+    char *sp = NULL;
+    for (char *ln = strtok_r(buf, "\r\n", &sp); ln; ln = strtok_r(NULL, "\r\n", &sp)) {
+        if (strncmp(ln, "OPEN ", 5) != 0) continue;
+        char *app = ln + 5;
+        while (*app == ' ') app++;
+        char *arg = strchr(app, ' ');
+        if (arg) { *arg++ = 0; while (*arg == ' ') arg++; }
+        int wk = apps_kind_from_name(app, NULL, NULL);
+        if (wk > 0) {
+            open_win_arg(wk, arg && arg[0] ? arg : NULL);
+            desk_hidden = 0;
+            changed = 1;
+        }
+    }
+    return changed;
 }
 
 static void layout_desktop(void) {
     int H = gfx_height();
-    desk_y0 = cf.top ? BAR_H : 0;
-    desk_y1 = cf.top ? H : H - BAR_H;
+    int pad = cf.floating_bar ? 8 : 0;
+    desk_y0 = cf.top ? (BAR_H + pad) : 0;
+    desk_y1 = cf.top ? H : (H - BAR_H - pad);
     for (int i = 0; i < N(wins); i++) if (wins[i].used) clamp_win(&wins[i]);
 }
 
 int gui_run(void) {
+    mg_conf_ensure_template();
+    mg_conf_load_all();
     load_cfg();
     if (gfx_open(cf.reqW, cf.reqH) < 0) {
         fputs("desktop: no graphics display found (/dev/dri or /dev/fb0); boot without -nographic\n", stderr);
         return GUI_TO_SHELL;
     }
 
+    unlink("/tmp/.mg-desktop.ipc");
     memset(wins, 0, sizeof wins);
-    nz = 0; next_id = 1; start_open = 0; menu_win = 0; dlg.type = D_NONE; desk_hidden = 0;
+    nz = 0; next_id = 1; start_open = 0; menu_win = 0; ctx_open = 0;
+    dlg.type = D_NONE; desk_hidden = 0;
     toast_msg[0] = 0; mode_move = mode_resize = 0; quit_code = -1; drg.on = 0;
     gfx_get_cursor(&hover_x, &hover_y);
 
     rebuild_res_opts();
     layout_desktop();
     const struct gfx_info *gi = gfx_get_info();
-    toast("Welcome. %s (%dx%d). Ctrl+G Start, Ctrl+Q Console.",
+    toast("Welcome. %s (%dx%d). Click 12 Mg or Programs.",
           gi->backend == GFX_GPU_DRIVER ? gi->driver : "Basic Display", gi->width, gi->height);
+
+    /* Optional test hook to pre-open showcase windows when rendering screenshots */
+    const char *test_open = getenv("MG_TEST_OPEN");
+    if (test_open && test_open[0]) {
+        char tb[160];
+        snprintf(tb, sizeof tb, "%s", test_open);
+        char *sp = NULL;
+        for (char *t = strtok_r(tb, ",", &sp); t; t = strtok_r(NULL, ",", &sp)) {
+            if (!strcmp(t, "start")) { start_open = 1; build_tiles(); }
+            else if (!strcmp(t, "settings_dp")) { open_win(WK_SETTINGS); open_cat(1); }
+            else if (!strcmp(t, "settings_mn")) { open_win(WK_SETTINGS); open_cat(2); }
+            else if (!strcmp(t, "settings_nw")) { open_win(WK_SETTINGS); open_cat(3); }
+            else if (!strcmp(t, "settings_dv")) { open_win(WK_SETTINGS); open_cat(4); }
+            else if (!strcmp(t, "terminal")) open_win(WK_TERMINAL);
+            else if (!strcmp(t, "registry")) open_win(WK_REGISTRY);
+            else {
+                int wk = apps_kind_from_name(t, NULL, NULL);
+                if (wk > 0) open_win(wk);
+            }
+        }
+    }
 
     int need_draw = 1;
     time_t last_sec = 0, last_hotplug = time(NULL);
@@ -2393,6 +3049,8 @@ int gui_run(void) {
             last_sec = now;
             need_draw = 1;
         }
+        if (poll_desktop_ipc()) need_draw = 1;
+
         if (now - last_hotplug >= 2) {
             last_hotplug = now;
             if (gfx_check_hotplug(cf.reqW == 0)) {
@@ -2415,8 +3073,12 @@ int gui_run(void) {
             gfx_present();
             need_draw = 0;
         } else {
-            /* Hardware cursor moves immediately; software cursor refreshes dirty rect only */
             gfx_present();
+        }
+
+        if (getenv("MG_TEST_ONCE")) {
+            quit_code = GUI_TO_SHELL;
+            break;
         }
 
         int pty_ready = 0;
@@ -2438,14 +3100,6 @@ int gui_run(void) {
             on_key(k);
             need_draw = 1;
         }
-
-        /* Testing hook: exit after rendering initial frame if MG_TEST_ONCE=1 */
-        if (getenv("MG_TEST_ONCE")) {
-            render_desktop();
-            gfx_present();
-            quit_code = GUI_TO_SHELL;
-            break;
-        }
     }
 
     term_stop();
@@ -2453,45 +3107,40 @@ int gui_run(void) {
     return quit_code;
 }
 
-/* ================= Graphical First-Start & Login Screens ================= */
+/* ================= VaporGlass First-Start & Login Screens ================= */
 
 static void draw_auth_backdrop(const char *subtitle) {
-    const struct pal *p = &pals[0];
-    uint32_t acc = accents[0];
+    load_cfg();
+    const struct pal *p = &cf.p;
     int W = gfx_width(), H = gfx_height();
     reset_ui_clip();
-    gfx_gradient_v(0, 0, W, H, p->desk_top, p->desk_bot);
+    draw_wallpaper();
 
-    /* Top-left brand badge */
-    gfx_rrect(24, 22, 64, 28, 6, acc);
-    gfx_text(32, 28, "12 Mg", 0x0E1522, 1, 1, 56);
+    gfx_rrect(24, 22, 64, 28, 7, cf.acc);
+    gfx_text(32, 28, "12 Mg", cf.accfg, 1, 1, 56);
     gfx_textf(98, 28, p->winfg, 1, 1, W - 260, "%s %s", OS_NAME, OS_VERSION_LONG);
     if (subtitle) gfx_text(98, 48, subtitle, p->muted, 0, 1, W - 260);
 
-    /* Top-right UTC clock */
     char ck[64];
     time_t now = time(NULL); struct tm tm; gmtime_r(&now, &tm);
     strftime(ck, sizeof ck, "%a %d %b  %H:%M UTC", &tm);
     int cw = gfx_text_width(ck, 1);
     gfx_text(W - cw - 24, 28, ck, p->winfg, 1, 1, cw + 8);
 
-    /* Bottom-left GPU / Basic Display adapter status badge */
     const struct gfx_info *gi = gfx_get_info();
     char gpubuf[160];
     snprintf(gpubuf, sizeof gpubuf, "%s  \xc2\xb7  %dx%d", gi->desc, gi->width, gi->height);
     int gw = gfx_text_width(gpubuf, 1) + 24;
-    gfx_rrect(20, H - 44, gw, 26, 6, p->bar);
-    gfx_rrect_outline(20, H - 44, gw, 26, 6, p->border);
-    gfx_text(32, H - 39, gpubuf, gi->backend == GFX_GPU_DRIVER ? acc : p->muted, 0, 1, gw - 16);
+    gfx_glass_panel(20, H - 44, gw, 26, 7, p->bar, 195, 4, p->border, 16);
+    gfx_text(32, H - 39, gpubuf, gi->backend == GFX_GPU_DRIVER ? cf.acc : p->muted, 0, 1, gw - 16);
 }
 
 static void draw_text_field(int x, int y, int w, const char *label, const char *val, int cur, int masked, int focused) {
-    const struct pal *p = &pals[0];
-    uint32_t acc = accents[0];
+    const struct pal *p = &cf.p;
     gfx_text(x, y, label, p->muted, 1, 1, w);
     int fy = y + 20;
-    gfx_rrect(x, fy, w, 34, 6, p->input_bg);
-    gfx_rrect_outline(x, fy, w, 34, 6, focused ? acc : p->border);
+    gfx_rrect_alpha(x, fy, w, 34, 6, p->input_bg, 225);
+    gfx_rrect_outline(x, fy, w, 34, 6, focused ? cf.acc : p->border);
     char disp[140];
     size_t l = strlen(val);
     if (l >= sizeof disp) l = sizeof disp - 1;
@@ -2503,17 +3152,15 @@ static void draw_text_field(int x, int y, int w, const char *label, const char *
         gfx_text(x + 10, fy + 9, disp + start, p->winfg, 0, 1, w - 20);
     if (focused) {
         int cx = x + 10 + (cur - start) * 8;
-        gfx_rect(cx, fy + 8, 2, 18, acc);
+        gfx_rect(cx, fy + 8, 2, 18, cf.acc);
     }
 }
 
 int gui_first_start(void) {
     if (gfx_open(0, 0) < 0) return -1;
-    const struct pal *p = &pals[0];
-    uint32_t acc = accents[0];
     gfx_get_cursor(&hover_x, &hover_y);
 
-    int step = 0; /* 0 = root password, 1 = optional regular user */
+    int step = 0;
     char ubuf[64] = "", pw1[128] = "", pw2[128] = "", err[140] = "";
     int ulen = 0, ucur = 0, l1 = 0, c1 = 0, l2 = 0, c2 = 0, focus = 0;
     int minlen = atoi(reg_get(HIVE_SYSTEM, "Security/MinPasswordLength", "8"));
@@ -2523,12 +3170,12 @@ int gui_first_start(void) {
         int W = gfx_width(), H = gfx_height();
         nhots = 0; cur_wid = 0;
         draw_auth_backdrop("First start setup");
+        const struct pal *p = &cf.p;
 
         int cw = 440, ch = step == 0 ? 290 : 350;
         int cx = (W - cw) / 2, cy = (H - ch) / 2;
-        gfx_shadow(cx, cy, cw, ch, 10);
-        gfx_rrect(cx, cy, cw, ch, 10, p->win);
-        gfx_rrect_outline(cx, cy, cw, ch, 10, acc);
+        gfx_shadow(cx, cy, cw, ch, 12);
+        gfx_glass_panel(cx, cy, cw, ch, 12, p->win, 200, 6, cf.acc, 24);
 
         if (step == 0) {
             gfx_text(cx + 24, cy + 20, "Create Administrator Account", p->winfg, 1, 1, cw - 48);
@@ -2539,7 +3186,7 @@ int gui_first_start(void) {
             draw_text_field(cx + 24, cy + 144, cw - 48, "Confirm root password", pw2, c2, 1, focus == 1);
             hot_add(cx + 24, cy + 164, cw - 48, 34, 100, 1, 0);
             if (err[0]) gfx_text(cx + 24, cy + 212, err, p->bad, 0, 1, cw - 48);
-            draw_button(cx + cw - 134, cy + ch - 46, 110, 30, "Continue", 0x0E1522, acc, 101, 0, 0);
+            draw_button(cx + cw - 134, cy + ch - 46, 110, 30, "Continue", cf.accfg, cf.acc, 101, 0, 0);
         } else {
             gfx_text(cx + 24, cy + 20, "Create Regular User (Optional)", p->winfg, 1, 1, cw - 48);
             gfx_text(cx + 24, cy + 42, "Recommended for daily work, or click Skip.", p->muted, 0, 1, cw - 48);
@@ -2551,7 +3198,7 @@ int gui_first_start(void) {
             hot_add(cx + 24, cy + 224, cw - 48, 34, 100, 2, 0);
             if (err[0]) gfx_text(cx + 24, cy + 270, err, p->bad, 0, 1, cw - 48);
             draw_button(cx + cw - 232, cy + ch - 46, 90, 30, "Skip", p->winfg, p->titleoff, 102, 0, 0);
-            draw_button(cx + cw - 134, cy + ch - 46, 110, 30, "Finish", 0x0E1522, acc, 101, 0, 0);
+            draw_button(cx + cw - 134, cy + ch - 46, 110, 30, "Finish", cf.accfg, cf.acc, 101, 0, 0);
         }
 
         gfx_present();
@@ -2593,10 +3240,7 @@ int gui_first_start(void) {
             }
         }
 
-        if (skip && step == 1) {
-            users_save();
-            break;
-        }
+        if (skip && step == 1) { users_save(); break; }
         if (submit) {
             if (step == 0) {
                 if (l1 < minlen) { snprintf(err, sizeof err, "Password must be at least %d characters.", minlen); continue; }
@@ -2633,14 +3277,11 @@ int gui_first_start(void) {
 
 int gui_login(char *out_user, size_t n) {
     if (gfx_open(0, 0) < 0) return -1;
-    const struct pal *p = &pals[0];
-    uint32_t acc = accents[0];
     gfx_get_cursor(&hover_x, &hover_y);
 
     users_load();
     char accts[8][40];
     int naccts = 0;
-    /* Prefer listing regular users first, then root */
     for (uid_t uid = 1000; uid < 65000 && naccts < 7; uid++) {
         const struct user *u = user_by_uid(uid);
         if (!u) { if (uid > users_next_uid()) break; continue; }
@@ -2658,12 +3299,12 @@ int gui_login(char *out_user, size_t n) {
         int W = gfx_width(), H = gfx_height();
         nhots = 0; cur_wid = 0;
         draw_auth_backdrop("Sign in to start your session");
+        const struct pal *p = &cf.p;
 
         int cw = 420, ch = naccts > 0 ? 310 : 270;
         int cx = (W - cw) / 2, cy = (H - ch) / 2;
-        gfx_shadow(cx, cy, cw, ch, 10);
-        gfx_rrect(cx, cy, cw, ch, 10, p->win);
-        gfx_rrect_outline(cx, cy, cw, ch, 10, acc);
+        gfx_shadow(cx, cy, cw, ch, 12);
+        gfx_glass_panel(cx, cy, cw, ch, 12, p->win, 200, 6, cf.acc, 24);
 
         gfx_text(cx + 24, cy + 20, "Sign in", p->winfg, 1, 1, cw - 48);
 
@@ -2674,26 +3315,25 @@ int gui_login(char *out_user, size_t n) {
                 int bw = gfx_text_width(accts[i], 1) + 20;
                 if (ux + bw > cx + cw - 24) break;
                 int sel = !strcmp(ubuf, accts[i]);
-                gfx_rrect(ux, fy, bw, 26, 13, sel ? acc : p->titleoff);
-                gfx_text(ux + 10, fy + 5, accts[i], sel ? 0x0E1522 : p->winfg, sel, 1, bw - 12);
-                hot_add(ux, fy, bw, 26, 200, i, 0);
+                gfx_rrect(ux, fy, bw, 26, 13, sel ? cf.acc : p->titleoff);
+                gfx_text(ux + 10, fy + 5, accts[i], sel ? cf.accfg : p->winfg, sel, 1, bw - 12);
+                hot_add(ux, fy, bw, 26, 150, i, 0);
                 ux += bw + 8;
             }
             fy += 40;
         }
 
         draw_text_field(cx + 24, fy, cw - 48, "Username", ubuf, ucur, 0, focus == 0);
-        hot_add(cx + 24, fy + 20, cw - 48, 34, 201, 0, 0);
+        hot_add(cx + 24, fy + 20, cw - 48, 34, 151, 0, 0);
 
         draw_text_field(cx + 24, fy + 66, cw - 48, "Password", pw, pcur, 1, focus == 1);
-        hot_add(cx + 24, fy + 86, cw - 48, 34, 201, 1, 0);
+        hot_add(cx + 24, fy + 86, cw - 48, 34, 151, 1, 0);
 
         if (err[0]) gfx_text(cx + 24, fy + 132, err, p->bad, 0, 1, cw - 48);
-        draw_button(cx + cw - 134, cy + ch - 46, 110, 30, "Sign in", 0x0E1522, acc, 202, 0, 0);
+        draw_button(cx + cw - 134, cy + ch - 46, 110, 30, "Sign in", cf.accfg, cf.acc, 152, 0, 0);
 
-        /* Power controls in bottom-right corner */
-        draw_button(W - 224, H - 46, 94, 28, "Restart", p->winfg, p->titleoff, 203, 0, 0);
-        draw_button(W - 120, H - 46, 100, 28, "Shut down", 0xFFFFFF, p->bad, 204, 0, 0);
+        draw_button(W - 224, H - 46, 94, 28, "Restart", p->winfg, p->titleoff, 153, 0, 0);
+        draw_button(W - 120, H - 46, 100, 28, "Shut down", 0xFFFFFF, p->bad, 154, 0, 0);
 
         gfx_present();
         if (getenv("MG_TEST_ONCE")) { memset(pw, 0, sizeof pw); gfx_close(); return -1; }
@@ -2708,14 +3348,14 @@ int gui_login(char *out_user, size_t n) {
             if (mev.kind == GM_PRESS && mev.btn == 0) {
                 const struct hot *h = hot_at(mev.x, mev.y);
                 if (h) {
-                    if (h->act == 200) {
+                    if (h->act == 150) {
                         snprintf(ubuf, sizeof ubuf, "%s", accts[h->a]);
                         ulen = ucur = (int)strlen(ubuf);
                         focus = 1; err[0] = 0;
-                    } else if (h->act == 201) focus = h->a;
-                    else if (h->act == 202) try_login = 1;
-                    else if (h->act == 203) { sync(); reboot(RB_AUTOBOOT); }
-                    else if (h->act == 204) { sync(); reboot(RB_POWER_OFF); }
+                    } else if (h->act == 151) focus = h->a;
+                    else if (h->act == 152) try_login = 1;
+                    else if (h->act == 153) { sync(); reboot(RB_AUTOBOOT); }
+                    else if (h->act == 154) { sync(); reboot(RB_POWER_OFF); }
                 }
             }
             continue;
@@ -2748,7 +3388,6 @@ int gui_login(char *out_user, size_t n) {
             if (base < 0) base = 0;
             if (base > 30) base = 30;
             snprintf(err, sizeof err, "Checking...");
-            /* Render feedback before login delay */
             gfx_present();
             sleep((unsigned)(failures < 3 ? base : base * 2 + 1));
             snprintf(err, sizeof err, "Incorrect username or password.");

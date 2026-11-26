@@ -1311,25 +1311,98 @@ void gfx_box(int x, int y, int w, int h, uint32_t rgb, int thick) {
     gfx_rect(x + w - thick, y + thick, thick, h - 2 * thick, rgb);
 }
 
-static int rrect_inset(int r, int dy) {
-    /* dy is distance from corner center [1..r] */
-    int r2 = r * r;
-    int x = r;
-    while (x > 0 && (x - 1) * (x - 1) + dy * dy >= r2) x--;
-    return r - x;
+void gfx_line(int x0, int y0, int x1, int y1, uint32_t rgb, int thick) {
+    if (thick < 1) thick = 1;
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    int sx = x0 < x1 ? 1 : -1;
+    int dy = -(y1 > y0 ? y1 - y0 : y0 - y1);
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    int half = thick / 2;
+    for (;;) {
+        if (thick == 1) gfx_put(x0, y0, rgb);
+        else gfx_rect(x0 - half, y0 - half, thick, thick, rgb);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+void gfx_circle(int cx, int cy, int r, uint32_t rgb, int fill) {
+    if (r <= 0) { gfx_put(cx, cy, rgb); return; }
+    if (fill) {
+        int r2 = r * r;
+        for (int dy = -r; dy <= r; dy++) {
+            int dx = 0;
+            while ((dx + 1) * (dx + 1) + dy * dy <= r2) dx++;
+            gfx_rect(cx - dx, cy + dy, 2 * dx + 1, 1, rgb);
+        }
+        return;
+    }
+    int x = r, y = 0, err = 1 - r;
+    while (x >= y) {
+        gfx_put(cx + x, cy + y, rgb); gfx_put(cx + y, cy + x, rgb);
+        gfx_put(cx - y, cy + x, rgb); gfx_put(cx - x, cy + y, rgb);
+        gfx_put(cx - x, cy - y, rgb); gfx_put(cx - y, cy - x, rgb);
+        gfx_put(cx + y, cy - x, rgb); gfx_put(cx + x, cy - y, rgb);
+        y++;
+        if (err < 0) err += 2 * y + 1;
+        else { x--; err += 2 * (y - x) + 1; }
+    }
+}
+
+/* 4x4 subpixel corner coverage for anti-aliased rounded rectangles */
+static int rrect_corner_cov(int r, int lx, int ly) {
+    /* lx, ly in [0 .. r-1] measured from outer corner (0,0); arc center is (r, r) in pixel coords */
+    int r4 = r * 4;
+    int r2 = r4 * r4;
+    int hits = 0;
+    for (int sy = 0; sy < 4; sy++) {
+        int dy = r4 - (ly * 4 + sy + 1);
+        for (int sx = 0; sx < 4; sx++) {
+            int dx = r4 - (lx * 4 + sx + 1);
+            if (dx * dx + dy * dy <= r2) hits++;
+        }
+    }
+    return (hits * 255) / 16;
+}
+
+static void put_alpha(int x, int y, uint32_t rgb, int a) {
+    if (a <= 0 || x < G.clx0 || x >= G.clx1 || y < G.cly0 || y >= G.cly1) return;
+    uint32_t *p = &G.comp[y * G.W + x];
+    *p = a >= 255 ? rgb : blend_px(*p, rgb, a + 1);
+}
+
+void gfx_rrect_alpha(int x, int y, int w, int h, int r, uint32_t rgb, int alpha) {
+    if (w <= 0 || h <= 0 || alpha <= 0) return;
+    if (r <= 0) { gfx_rect_alpha(x, y, w, h, rgb, alpha); return; }
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    gfx_rect_alpha(x, y + r, w, h - 2 * r, rgb, alpha);
+    for (int ly = 0; ly < r; ly++) {
+        int full_x = r;
+        for (int lx = 0; lx < r; lx++) {
+            int cov = rrect_corner_cov(r, lx, ly);
+            if (cov >= 255) { full_x = lx; break; }
+            if (cov > 0) {
+                int a = (cov * alpha) / 255;
+                put_alpha(x + lx, y + ly, rgb, a);
+                put_alpha(x + w - 1 - lx, y + ly, rgb, a);
+                put_alpha(x + lx, y + h - 1 - ly, rgb, a);
+                put_alpha(x + w - 1 - lx, y + h - 1 - ly, rgb, a);
+            }
+        }
+        if (w - 2 * full_x > 0) {
+            gfx_rect_alpha(x + full_x, y + ly, w - 2 * full_x, 1, rgb, alpha);
+            gfx_rect_alpha(x + full_x, y + h - 1 - ly, w - 2 * full_x, 1, rgb, alpha);
+        }
+    }
+    mark_dirty(x, y, x + w, y + h);
 }
 
 void gfx_rrect(int x, int y, int w, int h, int r, uint32_t rgb) {
-    if (w <= 0 || h <= 0) return;
-    if (r <= 0) { gfx_rect(x, y, w, h, rgb); return; }
-    if (r * 2 > w) r = w / 2;
-    if (r * 2 > h) r = h / 2;
-    gfx_rect(x, y + r, w, h - 2 * r, rgb);
-    for (int i = 0; i < r; i++) {
-        int ins = rrect_inset(r, r - i);
-        gfx_rect(x + ins, y + i, w - 2 * ins, 1, rgb);
-        gfx_rect(x + ins, y + h - 1 - i, w - 2 * ins, 1, rgb);
-    }
+    gfx_rrect_alpha(x, y, w, h, r, rgb, 255);
 }
 
 void gfx_rrect_outline(int x, int y, int w, int h, int r, uint32_t rgb) {
@@ -1341,25 +1414,156 @@ void gfx_rrect_outline(int x, int y, int w, int h, int r, uint32_t rgb) {
     gfx_hline(x + r, y + h - 1, w - 2 * r, rgb);
     gfx_vline(x, y + r, h - 2 * r, rgb);
     gfx_vline(x + w - 1, y + r, h - 2 * r, rgb);
-    int prev = r;
-    for (int i = 0; i < r; i++) {
-        int ins = rrect_inset(r, r - i);
-        int span = prev - ins;
-        if (span < 1) span = 1;
-        gfx_hline(x + ins, y + i, span, rgb);
-        gfx_hline(x + w - ins - span, y + i, span, rgb);
-        gfx_hline(x + ins, y + h - 1 - i, span, rgb);
-        gfx_hline(x + w - ins - span, y + h - 1 - i, span, rgb);
-        prev = ins;
+    int r4 = r * 4, ro2 = r4 * r4, ri2 = (r4 - 4) * (r4 - 4);
+    for (int ly = 0; ly < r; ly++) {
+        for (int lx = 0; lx < r; lx++) {
+            int hits = 0;
+            for (int sy = 0; sy < 4; sy++) {
+                int dy = r4 - (ly * 4 + sy + 1);
+                for (int sx = 0; sx < 4; sx++) {
+                    int dx = r4 - (lx * 4 + sx + 1);
+                    int d2 = dx * dx + dy * dy;
+                    if (d2 <= ro2 && d2 >= ri2) hits++;
+                }
+            }
+            if (hits > 0) {
+                int a = (hits * 255) / 16;
+                put_alpha(x + lx, y + ly, rgb, a);
+                put_alpha(x + w - 1 - lx, y + ly, rgb, a);
+                put_alpha(x + lx, y + h - 1 - ly, rgb, a);
+                put_alpha(x + w - 1 - lx, y + h - 1 - ly, rgb, a);
+            }
+        }
     }
+    mark_dirty(x, y, x + w, y + h);
+}
+
+/* Fast O(1)-per-pixel 2-pass separable running-sum box blur for VaporGlass */
+void gfx_blur_rect(int x, int y, int w, int h, int radius) {
+    if (radius <= 0 || w <= 2 || h <= 2) return;
+    if (radius > 16) radius = 16;
+    int x0 = x < G.clx0 ? G.clx0 : x;
+    int y0 = y < G.cly0 ? G.cly0 : y;
+    int x1 = x + w > G.clx1 ? G.clx1 : x + w;
+    int y1 = y + h > G.cly1 ? G.cly1 : y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > G.W) x1 = G.W;
+    if (y1 > G.H) y1 = G.H;
+    int bw = x1 - x0, bh = y1 - y0;
+    if (bw <= 2 || bh <= 2 || bw > 4096 || bh > 4096) return;
+
+    static uint32_t line[4096];
+    int div = 2 * radius + 1;
+
+    for (int pass = 0; pass < 2; pass++) {
+        /* Horizontal running-sum pass */
+        for (int yy = y0; yy < y1; yy++) {
+            uint32_t *row = &G.comp[yy * G.W + x0];
+            memcpy(line, row, (size_t)bw * sizeof(uint32_t));
+            uint32_t sr = 0, sg = 0, sb = 0;
+            for (int k = -radius; k <= radius; k++) {
+                int idx = k < 0 ? 0 : (k >= bw ? bw - 1 : k);
+                uint32_t c = line[idx];
+                sr += (c >> 16) & 255u; sg += (c >> 8) & 255u; sb += c & 255u;
+            }
+            for (int i = 0; i < bw; i++) {
+                row[i] = ((sr / (uint32_t)div) << 16) | ((sg / (uint32_t)div) << 8) | (sb / (uint32_t)div);
+                int out_i = i - radius; if (out_i < 0) out_i = 0;
+                int in_i  = i + radius + 1; if (in_i >= bw) in_i = bw - 1;
+                uint32_t co = line[out_i], ci = line[in_i];
+                sr += ((ci >> 16) & 255u) - ((co >> 16) & 255u);
+                sg += ((ci >> 8) & 255u)  - ((co >> 8) & 255u);
+                sb += (ci & 255u)         - (co & 255u);
+            }
+        }
+        /* Vertical running-sum pass */
+        for (int xx = x0; xx < x1; xx++) {
+            for (int j = 0; j < bh; j++) line[j] = G.comp[(y0 + j) * G.W + xx];
+            uint32_t sr = 0, sg = 0, sb = 0;
+            for (int k = -radius; k <= radius; k++) {
+                int idx = k < 0 ? 0 : (k >= bh ? bh - 1 : k);
+                uint32_t c = line[idx];
+                sr += (c >> 16) & 255u; sg += (c >> 8) & 255u; sb += c & 255u;
+            }
+            for (int j = 0; j < bh; j++) {
+                G.comp[(y0 + j) * G.W + xx] =
+                    ((sr / (uint32_t)div) << 16) | ((sg / (uint32_t)div) << 8) | (sb / (uint32_t)div);
+                int out_j = j - radius; if (out_j < 0) out_j = 0;
+                int in_j  = j + radius + 1; if (in_j >= bh) in_j = bh - 1;
+                uint32_t co = line[out_j], ci = line[in_j];
+                sr += ((ci >> 16) & 255u) - ((co >> 16) & 255u);
+                sg += ((ci >> 8) & 255u)  - ((co >> 8) & 255u);
+                sb += (ci & 255u)         - (co & 255u);
+            }
+        }
+    }
+    mark_dirty(x0, y0, x1, y1);
+}
+
+/*
+ * Magnesium VaporGlass panel:
+ * Frosted live backdrop blur + mineral tint + diagonal crystalline ion-sheen +
+ * inner top specular highlight + anti-aliased luminous rim.
+ */
+void gfx_glass_panel(int x, int y, int w, int h, int r, uint32_t tint_rgb,
+                     int alpha, int blur_r, uint32_t rim_rgb, int sheen) {
+    if (w <= 0 || h <= 0) return;
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+
+    if (blur_r > 0 && alpha < 248 && w > 4 && h > 4) {
+        int inset = r > 4 ? 2 : 1;
+        gfx_blur_rect(x + inset, y + inset, w - 2 * inset, h - 2 * inset, blur_r);
+    }
+
+    gfx_rrect_alpha(x, y, w, h, r, tint_rgb, alpha);
+
+    /* Subtle crystalline ion-sheen (angled mineral light facets across top surface) */
+    if (sheen > 0 && h > 8 && w > 12) {
+        int sh_h = h < 64 ? h / 2 : 34;
+        int x0 = x < G.clx0 ? G.clx0 : x;
+        int x1 = x + w > G.clx1 ? G.clx1 : x + w;
+        for (int j = 1; j < sh_h; j++) {
+            int py = y + j;
+            if (py < G.cly0 || py >= G.cly1) continue;
+            int ins = j < r ? (r - 1) : 1;
+            int lx0 = x + ins < x0 ? x0 : x + ins;
+            int lx1 = x + w - ins > x1 ? x1 : x + w - ins;
+            if (lx0 >= lx1) continue;
+            int vfade = ((sh_h - j) * sheen) / sh_h;
+            uint32_t *row = &G.comp[py * G.W];
+            for (int px = lx0; px < lx1; px++) {
+                /* Gentle crystalline facet wave (uniquely Magnesium mineral-glass) */
+                int u = (px - x) + j * 2;
+                int facet = ((u % 180) < 46) ? 10 : (((u % 180) > 110 && (u % 180) < 132) ? 6 : 0);
+                int a = vfade + (facet * (sh_h - j)) / sh_h;
+                if (a > 0) row[px] = blend_px(row[px], 0xFFFFFFu, a + 1);
+            }
+        }
+        /* Crisp 1px top specular highlight inside the rounded corners */
+        int hx = x + (r > 2 ? r : 2);
+        int hw = w - 2 * (r > 2 ? r : 2);
+        if (hw > 0) gfx_rect_alpha(hx, y + 1, hw, 1, 0xFFFFFFu, sheen + 26 > 110 ? 110 : sheen + 26);
+        mark_dirty(x, y, x + w, y + sh_h + 2);
+    }
+
+    gfx_rrect_outline(x, y, w, h, r, rim_rgb);
 }
 
 void gfx_shadow(int x, int y, int w, int h, int r) {
-    (void)r;
-    gfx_rect_alpha(x + 6, y + h, w - 2, 6, 0x000000, 75);
-    gfx_rect_alpha(x + w, y + 6, 6, h - 6, 0x000000, 75);
-    gfx_rect_alpha(x + 3, y + h, w + 1, 3, 0x000000, 55);
-    gfx_rect_alpha(x + w, y + 3, 3, h - 3, 0x000000, 55);
+    /* Soft multi-step feathered ambient drop shadow */
+    static const int alphas[5] = { 34, 24, 16, 10, 5 };
+    for (int i = 0; i < 5; i++) {
+        int pad = i * 2 + 1;
+        int sx = x - pad + 2, sy = y + 3 - i;
+        int sw = w + pad * 2, sh = h + pad + i + 2;
+        int sr = r + pad;
+        /* Draw outer shadow band around window bounds so translucent glass stays clean */
+        gfx_rect_alpha(sx + sr / 2, sy + sh - 2, sw - sr, 2, 0x000000, alphas[i]);
+        gfx_rect_alpha(sx + sw - 2, sy + sr / 2, 2, sh - sr, 0x000000, alphas[i]);
+        gfx_rect_alpha(sx, sy + sr / 2, 2, sh - sr, 0x000000, alphas[i] / 2);
+    }
 }
 
 void gfx_gradient_v(int x, int y, int w, int h, uint32_t top_rgb, uint32_t bot_rgb) {
@@ -1375,7 +1579,129 @@ void gfx_gradient_v(int x, int y, int w, int h, uint32_t top_rgb, uint32_t bot_r
     }
 }
 
-/* ---------- Text rendering ---------- */
+/* ---------- Smooth Anti-Aliased Typography Engine ---------- */
+
+#define FONT_COUNT (FONT_LAST - FONT_FIRST + 1)
+static int font_mode = GFX_FONT_SMOOTH;
+static int font_aa_ready = 0;
+static uint8_t font_aa1[FONT_COUNT][16][8];   /* 1x (8x16) smooth hinted coverage */
+static uint8_t font_aa2[FONT_COUNT][32][16];  /* 2x (16x32) native smooth vector coverage */
+
+void gfx_set_font_mode(int mode) {
+    if (mode < GFX_FONT_SMOOTH || mode > GFX_FONT_CRISP) mode = GFX_FONT_SMOOTH;
+    font_mode = mode;
+}
+int gfx_get_font_mode(void) { return font_mode; }
+
+static inline int glyph_bit(int g, int x, int y) {
+    if (x < 0 || x >= FONT_W || y < 0 || y >= FONT_H) return 0;
+    return (mg_font8x16[g][y] & (0x80u >> x)) ? 1 : 0;
+}
+
+struct fseg { int16_t x0, y0, x1, y1, r2; };
+
+/*
+ * Reconstructs continuous vector stroke capsules (stems, bars, curves & diagonals)
+ * from each 8x16 glyph and rasterizes 16x-supersampled anti-aliased coverage
+ * atlases for both 1x (8x16) and native 2x (16x32) typography.
+ */
+static void ensure_font_atlases(void) {
+    if (font_aa_ready) return;
+    font_aa_ready = 1;
+
+    for (int g = 0; g < FONT_COUNT; g++) {
+        struct fseg segs[256];
+        int nseg = 0;
+        for (int y = 0; y < FONT_H; y++) {
+            for (int x = 0; x < FONT_W; x++) {
+                if (!glyph_bit(g, x, y)) continue;
+                int cx = x * 16 + 8, cy = y * 16 + 8;
+                int has_nbr = 0;
+                /* Orthogonal stems & bars: crisp pixel-aligned radius (8.0/16 = 0.5px) */
+                if (glyph_bit(g, x + 1, y) && nseg < 256) {
+                    segs[nseg++] = (struct fseg){ (int16_t)cx, (int16_t)cy, (int16_t)(cx + 16), (int16_t)cy, 64 };
+                    has_nbr = 1;
+                }
+                if (glyph_bit(g, x, y + 1) && nseg < 256) {
+                    segs[nseg++] = (struct fseg){ (int16_t)cx, (int16_t)cy, (int16_t)cx, (int16_t)(cy + 16), 64 };
+                    has_nbr = 1;
+                }
+                /* Diagonal strokes & curve arcs: connect across empty saddles into smooth 45-deg capsules */
+                if (glyph_bit(g, x + 1, y + 1) &&
+                    !(glyph_bit(g, x + 1, y) && glyph_bit(g, x, y + 1)) && nseg < 256) {
+                    segs[nseg++] = (struct fseg){ (int16_t)cx, (int16_t)cy, (int16_t)(cx + 16), (int16_t)(cy + 16), 54 };
+                    has_nbr = 1;
+                }
+                if (glyph_bit(g, x - 1, y + 1) &&
+                    !(glyph_bit(g, x - 1, y) && glyph_bit(g, x, y + 1)) && nseg < 256) {
+                    segs[nseg++] = (struct fseg){ (int16_t)cx, (int16_t)cy, (int16_t)(cx - 16), (int16_t)(cy + 16), 54 };
+                    has_nbr = 1;
+                }
+                /* Isolated dot (e.g. 'i', ':', '.') */
+                if (!has_nbr && !glyph_bit(g, x - 1, y) && !glyph_bit(g, x, y - 1) &&
+                    !glyph_bit(g, x - 1, y - 1) && !glyph_bit(g, x + 1, y - 1) && nseg < 256) {
+                    segs[nseg++] = (struct fseg){ (int16_t)cx, (int16_t)cy, (int16_t)cx, (int16_t)cy, 68 };
+                }
+            }
+        }
+        if (nseg == 0) continue;
+
+        /* 1x (8x16) hinted smooth coverage: 4x4 subsamples per pixel */
+        for (int py = 0; py < 16; py++) {
+            for (int px = 0; px < 8; px++) {
+                int hits = 0;
+                for (int sy = 0; sy < 4; sy++) {
+                    int fy = py * 16 + sy * 4 + 2;
+                    for (int sx = 0; sx < 4; sx++) {
+                        int fx = px * 16 + sx * 4 + 2;
+                        for (int k = 0; k < nseg; k++) {
+                            int dx = segs[k].x1 - segs[k].x0, dy = segs[k].y1 - segs[k].y0;
+                            int l2 = dx * dx + dy * dy;
+                            int t = l2 ? (((fx - segs[k].x0) * dx + (fy - segs[k].y0) * dy) * 256) / l2 : 0;
+                            if (t < 0) t = 0; else if (t > 256) t = 256;
+                            int qx = segs[k].x0 + (dx * t) / 256;
+                            int qy = segs[k].y0 + (dy * t) / 256;
+                            int d2 = (fx - qx) * (fx - qx) + (fy - qy) * (fy - qy);
+                            if (d2 <= segs[k].r2) { hits++; break; }
+                        }
+                    }
+                }
+                int a = (hits * 255) / 16;
+                /* Slight perceptual contrast lift so 1x stems stay crisp and smooth edges pop */
+                a = a + ((a * (255 - a)) >> 9);
+                if (a > 255) a = 255;
+                font_aa1[g][py][px] = (uint8_t)a;
+            }
+        }
+
+        /* 2x (16x32) native smooth vector coverage: 4x4 subsamples per 2x pixel */
+        for (int py = 0; py < 32; py++) {
+            for (int px = 0; px < 16; px++) {
+                int hits = 0;
+                for (int sy = 0; sy < 4; sy++) {
+                    int fy = py * 8 + sy * 2 + 1;
+                    for (int sx = 0; sx < 4; sx++) {
+                        int fx = px * 8 + sx * 2 + 1;
+                        for (int k = 0; k < nseg; k++) {
+                            int dx = segs[k].x1 - segs[k].x0, dy = segs[k].y1 - segs[k].y0;
+                            int l2 = dx * dx + dy * dy;
+                            int t = l2 ? (((fx - segs[k].x0) * dx + (fy - segs[k].y0) * dy) * 256) / l2 : 0;
+                            if (t < 0) t = 0; else if (t > 256) t = 256;
+                            int qx = segs[k].x0 + (dx * t) / 256;
+                            int qy = segs[k].y0 + (dy * t) / 256;
+                            int d2 = (fx - qx) * (fx - qx) + (fy - qy) * (fy - qy);
+                            if (d2 <= segs[k].r2) { hits++; break; }
+                        }
+                    }
+                }
+                int a = (hits * 255) / 16;
+                a = a + ((a * (255 - a)) >> 9);
+                if (a > 255) a = 255;
+                font_aa2[g][py][px] = (uint8_t)a;
+            }
+        }
+    }
+}
 
 static uint32_t decode_utf8(const char **sp) {
     const unsigned char *s = (const unsigned char *)*sp;
@@ -1418,30 +1744,104 @@ int gfx_text_width(const char *s, int scale) {
     return n * cw;
 }
 
+static inline uint32_t blend_subpixel(uint32_t dst, uint32_t fg, int ar, int ag, int ab) {
+    uint32_t dr = (dst >> 16) & 255u, dg = (dst >> 8) & 255u, db = dst & 255u;
+    uint32_t sr = (fg >> 16) & 255u,  sg = (fg >> 8) & 255u,  sb = fg & 255u;
+    uint32_t r = (sr * (uint32_t)(ar + 1) + dr * (uint32_t)(256 - (ar + 1))) >> 8;
+    uint32_t g = (sg * (uint32_t)(ag + 1) + dg * (uint32_t)(256 - (ag + 1))) >> 8;
+    uint32_t b = (sb * (uint32_t)(ab + 1) + db * (uint32_t)(256 - (ab + 1))) >> 8;
+    return (r << 16) | (g << 8) | b;
+}
+
 int gfx_text(int x, int y, const char *s, uint32_t fg, int bold, int scale, int max_px) {
     if (!s || !*s) return 0;
     if (scale < 1) scale = 1;
     int cw = FONT_W * scale, ch = FONT_H * scale;
     int drawn = 0;
     int start_x = x;
+
+    if (font_mode == GFX_FONT_CRISP) {
+        while (*s) {
+            if (max_px >= 0 && drawn + cw > max_px) break;
+            int g = map_glyph(decode_utf8(&s)) - FONT_FIRST;
+            const uint8_t *bmp = mg_font8x16[g];
+            if (x + cw > G.clx0 && x < G.clx1 && y + ch > G.cly0 && y < G.cly1) {
+                for (int r = 0; r < FONT_H; r++) {
+                    uint8_t bits = bmp[r];
+                    if (bold) bits |= (uint8_t)(bits >> 1);
+                    if (!bits) continue;
+                    for (int sy = 0; sy < scale; sy++) {
+                        int py = y + r * scale + sy;
+                        if (py < G.cly0 || py >= G.cly1) continue;
+                        uint32_t *row = &G.comp[py * G.W];
+                        for (int c = 0; c < FONT_W; c++) {
+                            if (!(bits & (0x80u >> c))) continue;
+                            for (int sx = 0; sx < scale; sx++) {
+                                int px = x + c * scale + sx;
+                                if (px >= G.clx0 && px < G.clx1) row[px] = fg;
+                            }
+                        }
+                    }
+                }
+            }
+            x += cw;
+            drawn += cw;
+        }
+        if (drawn > 0) mark_dirty(start_x, y, start_x + drawn + (bold ? scale : 0), y + ch);
+        return drawn;
+    }
+
+    ensure_font_atlases();
+    int subpx = (font_mode == GFX_FONT_SUBPIXEL);
+
     while (*s) {
         if (max_px >= 0 && drawn + cw > max_px) break;
-        int g = map_glyph(decode_utf8(&s));
-        const uint8_t *bmp = mg_font8x16[g - FONT_FIRST];
-        if (x + cw > G.clx0 && x < G.clx1 && y + ch > G.cly0 && y < G.cly1) {
-            for (int r = 0; r < FONT_H; r++) {
-                uint8_t bits = bmp[r];
-                if (bold) bits |= (uint8_t)(bits >> 1);
-                if (!bits) continue;
-                for (int sy = 0; sy < scale; sy++) {
-                    int py = y + r * scale + sy;
+        int g = map_glyph(decode_utf8(&s)) - FONT_FIRST;
+        if (x + cw + 2 > G.clx0 && x < G.clx1 && y + ch > G.cly0 && y < G.cly1) {
+            if (scale == 1) {
+                for (int r = 0; r < 16; r++) {
+                    int py = y + r;
                     if (py < G.cly0 || py >= G.cly1) continue;
                     uint32_t *row = &G.comp[py * G.W];
-                    for (int c = 0; c < FONT_W; c++) {
-                        if (!(bits & (0x80u >> c))) continue;
-                        for (int sx = 0; sx < scale; sx++) {
-                            int px = x + c * scale + sx;
-                            if (px >= G.clx0 && px < G.clx1) row[px] = fg;
+                    for (int c = 0; c < 8; c++) {
+                        int px = x + c;
+                        if (px < G.clx0 || px >= G.clx1) continue;
+                        int a = font_aa1[g][r][c];
+                        if (bold && c > 0) {
+                            int bprev = (font_aa1[g][r][c - 1] * 3) >> 2;
+                            if (bprev > a) a = bprev;
+                        }
+                        if (a <= 0) continue;
+                        if (!subpx) {
+                            row[px] = a >= 254 ? fg : blend_px(row[px], fg, a + 1);
+                        } else {
+                            int al = c > 0 ? font_aa1[g][r][c - 1] : 0;
+                            int ar_n = c < 7 ? font_aa1[g][r][c + 1] : 0;
+                            int cr = (al + a * 2) / 3, cg = a, cb = (a * 2 + ar_n) / 3;
+                            row[px] = blend_subpixel(row[px], fg, cr, cg, cb);
+                        }
+                    }
+                }
+            } else {
+                int mult = scale / 2;
+                if (mult < 1) mult = 1;
+                for (int r = 0; r < 32; r++) {
+                    for (int sy = 0; sy < mult; sy++) {
+                        int py = y + r * mult + sy;
+                        if (py < G.cly0 || py >= G.cly1) continue;
+                        uint32_t *row = &G.comp[py * G.W];
+                        for (int c = 0; c < 16; c++) {
+                            int a = font_aa2[g][r][c];
+                            if (bold && c > 0) {
+                                int bp = font_aa2[g][r][c - 1];
+                                if (bp > a) a = bp;
+                            }
+                            if (a <= 0) continue;
+                            for (int sx = 0; sx < mult; sx++) {
+                                int px = x + c * mult + sx;
+                                if (px >= G.clx0 && px < G.clx1)
+                                    row[px] = a >= 254 ? fg : blend_px(row[px], fg, a + 1);
+                            }
                         }
                     }
                 }

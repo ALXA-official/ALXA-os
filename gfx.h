@@ -75,6 +75,15 @@ int gfx_set_resolution(int w, int h);
 int gfx_check_hotplug(int auto_res);
 
 /* Clipping & 2D pixel drawing into the 32-bit XRGB8888 backbuffer */
+enum {
+    GFX_FONT_SMOOTH   = 0,   /* Anti-aliased smooth vector-reconstructed glyphs */
+    GFX_FONT_SUBPIXEL = 1,   /* LCD RGB horizontal subpixel anti-aliased glyphs */
+    GFX_FONT_CRISP    = 2    /* Classic 1-bit pixel bitmap */
+};
+
+void gfx_set_font_mode(int mode);
+int  gfx_get_font_mode(void);
+
 void gfx_clip(int x, int y, int w, int h);
 void gfx_clip_reset(void);
 void gfx_mark_all_dirty(void);
@@ -84,9 +93,15 @@ void gfx_rect(int x, int y, int w, int h, uint32_t rgb);
 void gfx_rect_alpha(int x, int y, int w, int h, uint32_t rgb, int alpha);
 void gfx_hline(int x, int y, int w, uint32_t rgb);
 void gfx_vline(int x, int y, int h, uint32_t rgb);
+void gfx_line(int x0, int y0, int x1, int y1, uint32_t rgb, int thick);
+void gfx_circle(int cx, int cy, int r, uint32_t rgb, int fill);
 void gfx_box(int x, int y, int w, int h, uint32_t rgb, int thick);
 void gfx_rrect(int x, int y, int w, int h, int r, uint32_t rgb);
+void gfx_rrect_alpha(int x, int y, int w, int h, int r, uint32_t rgb, int alpha);
 void gfx_rrect_outline(int x, int y, int w, int h, int r, uint32_t rgb);
+void gfx_blur_rect(int x, int y, int w, int h, int radius);
+void gfx_glass_panel(int x, int y, int w, int h, int r, uint32_t tint_rgb,
+                     int alpha, int blur_r, uint32_t rim_rgb, int sheen);
 void gfx_shadow(int x, int y, int w, int h, int r);
 void gfx_gradient_v(int x, int y, int w, int h, uint32_t top_rgb, uint32_t bot_rgb);
 

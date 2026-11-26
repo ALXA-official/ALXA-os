@@ -26,6 +26,7 @@
 #include "line.h"
 #include "gfx.h"
 #include "gui.h"
+#include "net.h"
 #include "registry.h"
 #include "shell.h"
 #include "version.h"
@@ -36,7 +37,7 @@
 #define MAXPIPE  8
 #define MAXMATCH 256
 
-static const char *pathdirs[] = { "/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/data/bin", NULL };
+static const char *pathdirs[] = { "/programs", "/data/programs", "/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/data/bin", NULL };
 static int last_status;
 static int job_ctl;            /* 1 when we own a terminal and can hand it to jobs */
 static pid_t shell_pgid;
@@ -65,14 +66,15 @@ static int cmd_help(int argc, char **argv) {
     puts("                 env export unset reboot halt poweroff");
     puts("Accounts:        id whoami users passwd adduser deluser exit(logout)");
     puts("Shell:           echo clear true false history source sh ver commands which install help");
-    puts("Desktop:         desktop   (pixel desktop, Terminal, Settings, Registry Editor)");
-    puts("Display / GPU:   display   (or 'gpu': active GPU driver / Basic Display info)");
+    puts("Programs:        files notes calc canvas sysmon netcenter mines   (in /programs)");
+    puts("Network:         ip dhcp ping dns fetch netstat");
+    puts("Drivers & UI:    drivers lspci display(gpu) theme desktop");
     puts("Registry:        reg list | reg get KEY | reg set KEY VALUE | reg del KEY");
     puts("");
     puts("Syntax:  a | b   a > f   a >> f   a < f   a ; b   a && b   a || b   a &   # comment");
     puts("         \"quotes\"  'quotes'  $VAR  $?  ~  wildcards (* ? [])");
     puts("Keys:    Up/Down = history   Tab = complete   Ctrl+C = cancel/stop   Ctrl+D = logout");
-    puts("Programs in /bin, /usr/bin, /usr/local/bin, /sbin or /data/bin also run by name.");
+    puts("Programs in /programs, /data/programs, /bin, /usr/bin, /sbin or /data/bin run by name.");
     return 0;
 }
 
@@ -138,7 +140,11 @@ static const struct builtin core_builtins[] = {
     {"reboot", cmd_reboot, 0}, {"poweroff", cmd_poweroff, 0},
     {"exit", cmd_exit, 1}, {"logout", cmd_exit, 1}, {"history", cmd_history, 0},
     {"source", cmd_source, 1}, {"sh", cmd_sh, 0},
-    {"desktop", cmd_desktop, 1}, {"display", cmd_display, 0}, {"gpu", cmd_display, 0}, {"reg", cmd_reg, 0},
+    {"desktop", cmd_desktop, 1}, {"display", cmd_display, 0}, {"gpu", cmd_display, 0},
+    {"theme", cmd_theme, 0}, {"reg", cmd_reg, 0},
+    {"ip", cmd_ip, 0}, {"ifconfig", cmd_ip, 0}, {"dhcp", cmd_dhcp, 0},
+    {"ping", cmd_ping, 0}, {"dns", cmd_dns, 0}, {"fetch", cmd_fetch, 0}, {"netstat", cmd_netstat, 0},
+    {"drivers", cmd_drivers, 0}, {"lspci", cmd_lspci, 0},
     {"adduser", cmd_adduser, 0}, {"deluser", cmd_deluser, 0}, {"users", cmd_users, 0},
     {NULL, NULL, 0}
 };
@@ -205,8 +211,10 @@ static int cmd_install(int argc, char **argv) {
         !(magic[0] == '#' && magic[1] == '!'))
         fputs("install: warning: not a compiled program or script, it may not run\n", stderr);
 
-    /* Prefer the persistent disk when it is mounted. */
-    const char *dir = access("/data/bin", W_OK) == 0 ? "/data/bin" : "/bin";
+    /* Prefer the persistent programs directory when mounted, otherwise /programs. */
+    const char *dir = access("/data/programs", W_OK) == 0 ? "/data/programs" :
+                      access("/programs", W_OK) == 0 ? "/programs" :
+                      access("/data/bin", W_OK) == 0 ? "/data/bin" : "/bin";
     char dst[300];
     snprintf(dst, sizeof dst, "%s/%s", dir, name);
     if (copy_file(argv[1], dst, 0755) < 0) {

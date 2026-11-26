@@ -1,4 +1,4 @@
-# Magnesium OS v.A1 (version alpha 1)
+# Magnesium OS v.A2 (version alpha 2)
 
 Made by **alxa**.
 
@@ -7,8 +7,14 @@ Made by **alxa**.
 
 An extremely minimal graphical operating system: the Linux kernel plus one
 statically linked custom program (init, graphical setup & login, shell, editor,
-pixel desktop, windowed terminal, registry and ~70 commands). No third-party
+pixel desktop, windowed terminal, registry and ~90 commands). No third-party
 desktop environment, no shared libraries, no distribution bloat.
+
+New in v.A2: **VaporGlass** frosted-glass desktop with smooth anti-aliased
+fonts, 8 themes + 8 accents + 6 wallpapers, granular manual customization
+(`mg.conf`), TCP/IP networking (DHCP/DNS/ping/HTTP), broad hardware driver
+support, and built-in apps in `/programs` (Files, Notes, Calculator, Canvas,
+System Monitor, Network Center, Mg Mines).
 
 ## Graphics architecture (Basic Display + Native GPU Drivers)
 
@@ -112,12 +118,80 @@ Logging in on a graphical screen opens the Magnesium pixel desktop automatically
 - **Terminal:** a real windowed graphical terminal backed by a Linux PTY
   (`/dev/ptmx`) running the Magnesium shell inside the desktop.
 - **Settings:** System, Display (adapter status, pipeline info, live KMS
-  resolution switching, theme, accent, wallpaper), Taskbar, Date & time, Apps,
-  Accounts, Storage, Security, Terminal, and Advanced.
+  resolution switching, theme, accent, wallpaper), Manual (granular colors,
+  glass, metrics), Network, Drivers, Taskbar, Date & time, Apps, Accounts,
+  Storage, Security, Terminal, and Advanced.
 - **Registry Editor:** browse, add, edit and delete every stored value.
+- **Desktop icons:** shortcuts to every `/programs` app, plus a right-click
+  context menu (open `/programs`, next theme, toggle glass, edit `mg.conf`).
 
 Keys: `Ctrl+G` (`F1`) Start, `Ctrl+N` (`F6`) next window, `F4` close window,
 `F7` show desktop, `F10` window menu, `Ctrl+Q` exit to full-screen console.
+
+## VaporGlass, themes & manual customization
+
+The desktop uses **VaporGlass**: translucent frosted panels with a real
+backdrop-blur of the wallpaper behind them, smooth anti-aliased fonts
+(Smooth / Subpixel / Crisp modes), and the original **12 Mg** periodic-table
+design language (element tiles, atomic-number badges) — no copied Aero assets.
+
+- **8 themes:** Magnesium, Frost, Aurora, Obsidian, Ember, Cobalt, Sakura,
+  Classic — plus 8 accents and 6 wallpapers (Aurora, Gradient, Nebula, Prism,
+  Grid, Solid). Switch in **Settings > Display**, with `theme`, or in `mg.conf`.
+- **Manual customization:** **Settings > Manual** edits every color as
+  `#RRGGBB`, glass opacity/blur, corner roundness, font smoothing, taskbar
+  height, window metrics, and custom wallpaper gradients. Everything is stored
+  in the registry and in `mg.conf` (`/data/etc/mg.conf` for the system,
+  `~/.mg.conf` per user), so it survives reboots and can be edited in Notes.
+
+## Networking
+
+The kernel ships a full TCP/IP stack and NIC drivers (VirtIO-Net, Intel
+e1000/e1000e/igb, Realtek 8139/r8169, AMD PCnet, Hyper-V, USB Ethernet).
+`run-qemu.sh` / `run-web.sh` attach a QEMU user-mode (SLIRP) NIC, so DHCP and
+DNS work out of the box.
+
+    dhcp [IFACE]            acquire an IPv4 lease (auto-run at boot)
+    ip                      show interfaces, addresses, drivers, RX/TX
+    ip set IFACE IP [MASK] [GW] [DNS]   manual static IPv4
+    dns HOSTNAME            resolve a hostname (native UDP DNS, no libc NSS)
+    ping HOST [COUNT]       ICMP ping with TCP-80 fallback
+    fetch http://HOST/PATH  HTTP/1.1 client; prints page text
+    netstat                 interfaces + routes + DNS
+
+The **Network Center** app (desktop, `/programs/netcenter`) does the same in a
+window: DHCP Auto, Ping Gateway/DNS, and a built-in HTTP web reader.
+**Settings > Network** shows live interface status and lets you switch between
+DHCP and manual static configuration.
+
+## Drivers & hardware inspection
+
+Storage, bus, input and filesystem drivers are built in: NVMe, SATA/AHCI,
+USB mass storage, VFAT (FAT12/16/32) + ext2 for `/data`, RTC, and the full
+evdev/USB-HID input stack.
+
+    drivers                 every detected device, its bound driver, and status
+    lspci                   PCI bus scan with vendor/device names
+
+**Settings > Drivers** shows the same scan graphically, including the active
+GPU driver (or the Basic Display `simpledrm` fallback).
+
+## Built-in apps (/programs)
+
+Seven standalone apps are compiled from `programs/` into `/programs` at build
+time. They run by name from any shell (`PATH` includes `/programs`), appear as
+desktop icons and Start-menu tiles, and open native VaporGlass windows when
+launched from the desktop (or run in console mode with `--cli`):
+
+| App | What it does |
+|---|---|
+| `files` | File manager: Places sidebar, navigate, create files/folders |
+| `notes` | Text editor with line numbers (great for editing `mg.conf`) |
+| `calc` | Calculator (`calc 2+2` in console, interactive `calc --cli`) |
+| `canvas` | Drawing pad: pen/line/rect/circle/fill, colors, save as PPM |
+| `sysmon` | System & driver monitor: CPU/RAM, processes, hardware scan |
+| `netcenter` | Network Center + HTTP web reader |
+| `mines` | Mg Mines: the classic minesweeper game, Magnesium style |
 
 ## The shell
 
@@ -127,19 +201,22 @@ Keys: `Ctrl+G` (`F1`) Start, `Ctrl+N` (`F6`) next window, `F4` close window,
 | Files / folders | `cp mv rm del mkdir rmdir touch ln chmod chown stat du df basename dirname cd pwd` |
 | Editor | `edit FILE` (Ctrl+O save, Ctrl+X exit) |
 | System | `mem free uptime date uname hostname dmesg ps kill sleep seq sync mount umount env export unset reboot halt poweroff` |
-| Display / GPU | `display gpu desktop` |
+| Display / GPU | `display gpu desktop theme` |
+| Network | `ip ifconfig dhcp ping dns fetch netstat` |
+| Hardware | `drivers lspci` |
 | Accounts | `id whoami users passwd adduser deluser exit` |
 | Registry | `reg` |
 | Shell | `echo clear true false history source sh ver commands which install help` |
 
 ### Adding commands (apps)
 
-Any executable in `/bin`, `/usr/bin`, `/usr/local/bin`, `/sbin` or `/data/bin`
-runs by its name:
+Any executable in `/programs`, `/bin`, `/usr/bin`, `/usr/local/bin`, `/sbin`,
+`/data/programs` or `/data/bin` runs by its name:
 
 - **At build time:** put it in `overlay/bin/`; everything in `overlay/` is copied into the OS.
-- **While running (root only):** `install ./myapp` copies it to `/data/bin` (saved)
-  or `/bin` (RAM only, when no disk is attached).
+  Built-in desktop apps live in `programs/` and become `/programs/*`.
+- **While running (root only):** `install ./myapp` copies it to `/data/programs` (saved)
+  or `/programs` (RAM only, when no disk is attached).
 
 Programs must be **statically linked** (for example `gcc -static`), because
 Magnesium OS contains no shared libraries.
@@ -154,9 +231,11 @@ everyone can read, only root can change) and **User** (`~/.mg-registry`, private
 ## Tests
 
 `tests/vm-test.sh` boots the system twice in QEMU and checks first-start setup,
-login, permissions, and that accounts and files survive a reboot. GitHub
-Actions also boot-tests both Basic Display (`nomodeset` VESA framebuffer) and
-native VirtIO-GPU KMS modes on every push.
+login, permissions, and that accounts and files survive a reboot.
+`tests/net-test.sh` boots with a virtio-net NIC and checks the driver scan,
+DHCP lease, DNS resolution, and the `/programs` apps. GitHub Actions also
+boot-tests both Basic Display (`nomodeset` VESA framebuffer) and native
+VirtIO-GPU KMS modes on every push.
 
 ## Licensing
 

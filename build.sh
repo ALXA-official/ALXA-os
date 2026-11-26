@@ -7,6 +7,12 @@
 #     bare-metal Intel i915, AMD amdgpu/radeon, and NVIDIA nouveau KMS drivers)
 #   - Full evdev input stack (PS/2, VirtIO input, USB XHCI/EHCI/UHCI HID mice,
 #     tablets & keyboards) and UNIX98 PTYs for the windowed graphical terminal.
+#   - TCP/IP networking (VirtIO-Net, Intel e1000/e1000e/igb, Realtek 8139/r8169,
+#     AMD PCnet, Hyper-V, USB Ethernet) with DHCPv4/DNS in the shell, plus broad
+#     storage drivers (NVMe, SATA/AHCI, USB mass storage) and VFAT support so
+#     /data disks can be FAT-formatted as well as ext2.
+#   - Built-in desktop apps in /programs (Files, Notes, Calculator, Canvas,
+#     System Monitor, Network Center, Mg Mines), compiled from programs/.
 set -euo pipefail
 
 KERNEL_VERSION="${KERNEL_VERSION:-6.12.1}"
@@ -129,6 +135,53 @@ fi
   --enable USB_EHCI_PCI \
   --enable USB_UHCI_HCD \
   --enable USB_HID \
+  --enable NET \
+  --enable PACKET \
+  --enable UNIX \
+  --enable INET \
+  --enable IPV6 \
+  --enable IP_PNP \
+  --enable IP_PNP_DHCP \
+  --enable NETDEVICES \
+  --enable NET_CORE \
+  --enable ETHERNET \
+  --enable MII \
+  --enable PHYLIB \
+  --enable VIRTIO_NET \
+  --enable NET_VENDOR_INTEL \
+  --enable E1000 \
+  --enable E1000E \
+  --enable IGB \
+  --enable NET_VENDOR_REALTEK \
+  --enable 8139CP \
+  --enable 8139TOO \
+  --enable R8169 \
+  --enable NET_VENDOR_AMD \
+  --enable PCNET32 \
+  --enable HYPERV_NET \
+  --enable USB_NET_DRIVERS \
+  --enable USB_RTL8152 \
+  --enable USB_USBNET \
+  --enable USB_NET_CDCETHER \
+  --enable SCSI \
+  --enable BLK_DEV_SD \
+  --enable ATA \
+  --enable ATA_SFF \
+  --enable ATA_BMDMA \
+  --enable SATA_AHCI \
+  --enable ATA_PIIX \
+  --enable NVME_CORE \
+  --enable BLK_DEV_NVME \
+  --enable USB_STORAGE \
+  --enable FAT_FS \
+  --enable VFAT_FS \
+  --enable NLS \
+  --enable NLS_CODEPAGE_437 \
+  --enable NLS_ISO8859_1 \
+  --enable NLS_UTF8 \
+  --enable RTC_CLASS \
+  --enable RTC_HCTOSYS \
+  --enable RTC_DRV_CMOS \
   "${HW_GPU_ARGS[@]}"
 
 make olddefconfig
@@ -141,6 +194,8 @@ for opt in 64BIT SMP TTY UNIX98_PTYS VT VT_CONSOLE SERIAL_8250_CONSOLE \
            DRM DRM_FBDEV_EMULATION DRM_SIMPLEDRM \
            DRM_VIRTIO_GPU DRM_BOCHS DRM_VMWGFX DRM_VBOXVIDEO \
            VIRTIO_PCI VIRTIO_BLK VIRTIO_INPUT EXT2_FS \
+           NET INET NETDEVICES VIRTIO_NET E1000E R8169 PCNET32 \
+           NVME_CORE BLK_DEV_NVME SATA_AHCI USB_STORAGE VFAT_FS \
            INPUT INPUT_EVDEV KEYBOARD_ATKBD MOUSE_PS2 USB USB_XHCI_PCI USB_HID; do
   if ! grep -q "^CONFIG_${opt}=y" .config; then
     echo "ERROR: kernel option CONFIG_${opt} is not enabled after 'make olddefconfig'."
@@ -158,11 +213,20 @@ cd ..
 # 2) initramfs: our programs only, statically linked (no libraries in the OS)
 gcc -static -O2 -o ../init \
   ../boot.c ../shell.c ../users.c ../line.c ../cmds.c \
-  ../editor.c ../registry.c ../gfx.c ../gui.c -lcrypt
+  ../editor.c ../registry.c ../gfx.c ../gui.c ../gui_apps.c ../net.c -lcrypt
 
 rm -rf rootfs && mkdir rootfs
 cp ../init rootfs/init
 chmod 755 rootfs/init
+# Built-in desktop apps: each programs/<name>.c becomes /programs/<name>.
+# They are statically linked too (Magnesium OS has no libraries), run by name
+# from any shell (PATH includes /programs), and open native VaporGlass desktop
+# windows when launched from inside the graphical desktop.
+mkdir -p rootfs/programs
+for app in files notes calc canvas sysmon netcenter mines; do
+  gcc -static -O2 -o "rootfs/programs/$app" "../programs/$app.c"
+  chmod 755 "rootfs/programs/$app"
+done
 # /sbin/passwd is the same program; it is setuid root so users can change their
 # own password (it refuses to do anything else when run setuid).
 mkdir -p rootfs/sbin

@@ -26,6 +26,7 @@
 #include "shell.h"
 #include "gfx.h"
 #include "gui.h"
+#include "net.h"
 #include "version.h"
 #include "registry.h"
 
@@ -40,13 +41,14 @@ static int persistent;           /* 1 when the data disk is mounted on /data */
 
 static void mount_disk(void) {
     mkdir("/data", 0755);
-    const char *devs[] = { "/dev/vda", "/dev/sda", "/dev/vdb", NULL };
+    const char *devs[] = { "/dev/vda", "/dev/nvme0n1", "/dev/sda", "/dev/vdb", NULL };
     int seen = 0, err = 0;
     for (int attempt = 0; attempt < 5 && !persistent; attempt++) {
         for (int i = 0; devs[i] && !persistent; i++) {
             if (access(devs[i], F_OK) != 0) continue;
             seen = 1;
-            if (mount(devs[i], "/data", "ext2", MS_NOATIME | MS_NODEV, NULL) == 0) {
+            if (mount(devs[i], "/data", "ext2", MS_NOATIME | MS_NODEV, NULL) == 0 ||
+                mount(devs[i], "/data", "vfat", MS_NOATIME | MS_NODEV, NULL) == 0) {
                 persistent = 1;
                 puts("Disk mounted on /data (your files and accounts are saved).");
             } else err = errno;
@@ -62,6 +64,7 @@ static void mount_disk(void) {
         mkdir("/data/etc", 0755);
         mkdir("/data/home", 0755);
         mkdir("/data/bin", 0755);
+        mkdir("/data/programs", 0755);
     }
 }
 
@@ -75,7 +78,7 @@ static void setup_system(void) {
             if (fd > 2) close(fd);
         }
     }
-    const char *dirs[] = { "/bin", "/sbin", "/usr", "/usr/bin", "/usr/local",
+    const char *dirs[] = { "/programs", "/bin", "/sbin", "/usr", "/usr/bin", "/usr/local",
                            "/usr/local/bin", "/tmp", "/etc", "/home", "/proc", "/sys",
                            "/dev/pts", "/dev/shm", NULL };
     for (int i = 0; dirs[i]; i++) mkdir(dirs[i], 0755);
@@ -87,7 +90,7 @@ static void setup_system(void) {
     mount("tmpfs", "/dev/shm", "tmpfs", MS_NOSUID | MS_NODEV, NULL);
     chmod("/dev/ptmx", 0666);
     mount_disk();
-    setenv("PATH", "/bin:/usr/bin:/usr/local/bin:/sbin:/data/bin", 1);
+    setenv("PATH", "/programs:/data/programs:/bin:/usr/bin:/usr/local/bin:/sbin:/data/bin", 1);
     if (!getenv("TERM")) setenv("TERM", "linux", 1);
 }
 
@@ -97,7 +100,7 @@ static void chown_dir_devs(const char *dir, uid_t uid, gid_t gid, mode_t mode) {
     struct dirent *e;
     while ((e = readdir(dp)) != NULL) {
         if (e->d_name[0] == '.') continue;
-        char p[128];
+        char p[320];
         snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
         if (chown(p, uid, gid) < 0) { /* ignore */ }
         chmod(p, mode);
@@ -175,13 +178,14 @@ static void run_session(const struct user *u, int graphical) {
         char termcopy[64] = "linux";
         if (term) snprintf(termcopy, sizeof termcopy, "%s", term);
         clearenv();
-        setenv("PATH", "/bin:/usr/bin:/usr/local/bin:/sbin:/data/bin", 1);
+        setenv("PATH", "/programs:/data/programs:/bin:/usr/bin:/usr/local/bin:/sbin:/data/bin", 1);
         setenv("HOME", me.home, 1);
         setenv("USER", me.name, 1);
         setenv("LOGNAME", me.name, 1);
         setenv("TERM", termcopy, 1);
         if (graphical) setenv("MG_GRAPHICAL_LOGIN", "1", 1);
         { char up[200]; snprintf(up, sizeof up, "%s/.mg-registry", me.home); reg_set_paths(NULL, up); }
+        mg_conf_load_all();
         reg_apply_env();
         umask(022);
         if (chdir(me.home) < 0 && chdir("/") < 0) _exit(1);
@@ -262,6 +266,30 @@ static void init_loop(void) {
         snprintf(rp, sizeof rp, "%s/registry", persistent ? "/data/etc" : MG_ETC_DIR);
         reg_set_paths(rp, "");               /* system settings and variables */
     }
+    mg_conf_ensure_template();
+    mg_conf_load_all();
+
+    /* Bring up loopback synchronously and auto-configure NIC (DHCP/static) in background */
+    sethostname(OS_SHORT, strlen(OS_SHORT));
+    {
+        int pfd = open("/proc/sys/net/ipv4/ping_group_range", O_WRONLY | O_CLOEXEC);
+        if (pfd >= 0) { ssize_t w = write(pfd, "0 2147483647\n", 13); (void)w; close(pfd); }
+        pid_t npid = fork();
+        if (npid == 0) {
+            net_boot_init();
+            struct net_iface ifs[8];
+            int cnt = net_list_ifaces(ifs, 8);
+            for (int i = 0; i < cnt; i++) {
+                if (!ifs[i].loopback) {
+                    log_kmsg("<6>%s %s: network ready [%s] driver=%s ip=%s\n",
+                             OS_NAME, OS_VERSION, ifs[i].name, ifs[i].driver, ifs[i].ip);
+                    break;
+                }
+            }
+            _exit(0);
+        }
+    }
+
     puts("");
     puts("  " OS_NAME " " OS_VERSION_LONG);
     puts("  Made by " OS_AUTHOR " - Linux kernel + Magnesium shell");
@@ -290,6 +318,13 @@ int main(int argc, char **argv) {
     if (pid1 || (argc > 1 && !strcmp(argv[1], "--init"))) {
         init_loop();
         return 0;
+    }
+    {
+        char up[200] = "/tmp/.mg-user-registry";
+        const char *hm = getenv("HOME");
+        if (hm && hm[0]) snprintf(up, sizeof up, "%.170s/.mg-registry", hm);
+        reg_set_paths("/tmp/.mg-sys-registry", up);
+        mg_conf_load_all();
     }
     shell_session();                                 /* development mode: no login */
     return 0;
