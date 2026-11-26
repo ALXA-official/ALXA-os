@@ -1,0 +1,7 @@
+# Build outputs (see build.sh, make-iso.py)
+build/
+bzImage
+initramfs.gz
+kernel.config
+disk.img
+*.iso

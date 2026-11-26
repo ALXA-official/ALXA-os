@@ -76,6 +76,24 @@ To also build bare-metal Intel/AMD/NVIDIA KMS drivers into `bzImage`:
     GPU=basic ./run-qemu.sh     # No-GPU-driver mode (nomodeset + VESA 1024x768x32 firmware framebuffer)
     GPU=serial ./run-qemu.sh    # Headless serial console (-nographic; exit with Ctrl+A then X)
 
+## Bootable ISO
+
+After `./build.sh`, package the kernel and initramfs as a bootable ISO
+(BIOS and UEFI, booted by the [Limine](https://limine-bootloader.org) bootloader):
+
+    pip install pycdlib
+    python3 make-iso.py          # writes magnesium-os-v.A2.iso
+
+The ISO needs no xorriso or grub. `make-iso.py` downloads Limine once, pinned to
+a specific commit, into `build/limine/`. Burn the ISO to a CD/DVD or attach it to
+a VM as a CD-ROM. Writing it to a USB stick with `dd` is not supported yet.
+
+    qemu-system-x86_64 -m 256M -vga std -cdrom magnesium-os-v.A2.iso \
+      -nic user,model=virtio-net-pci -serial stdio
+
+The ISO runs without a data disk, so accounts and settings are lost at reboot.
+To keep them, attach a `disk.img` as a second drive, as `run-qemu.sh` does.
+
 ## First start, accounts and security
 
 1. On the very first boot there are no accounts. Magnesium OS opens a graphical
