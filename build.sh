@@ -213,7 +213,7 @@ cd ..
 # 2) initramfs: our programs only, statically linked (no libraries in the OS)
 gcc -static -O2 -o ../init \
   ../boot.c ../shell.c ../users.c ../line.c ../cmds.c \
-  ../editor.c ../registry.c ../gfx.c ../gui.c ../gui_apps.c ../media_apps.c ../imgcodec.c ../extapp.c ../net.c -lcrypt -lm
+  ../editor.c ../registry.c ../gfx.c ../gui.c ../gui_apps.c ../media_apps.c ../imgcodec.c ../cursorfile.c ../extapp.c ../net.c -lcrypt -lm
 
 rm -rf rootfs && mkdir rootfs
 cp ../init rootfs/init

@@ -63,6 +63,28 @@ void img_free(mg_image *im) {
     im->w = im->h = 0;
 }
 
+/* Turn stb's RGBA bytes into 0xAARRGGBB and take ownership of the stb buffer. */
+static int img_convert_rgba(stbi_uc *pix, int w, int h, mg_image *out, char *err, size_t errlen) {
+    if (w <= 0 || h <= 0 || (unsigned long long)w * (unsigned long long)h > IMG_MAX_PIXELS) {
+        stbi_image_free(pix);
+        set_err(err, errlen, "image is too large to display");
+        return -1;
+    }
+    size_t n = (size_t)w * (size_t)h;
+    uint32_t *dst = malloc(n * sizeof(uint32_t));
+    if (!dst) { stbi_image_free(pix); set_err(err, errlen, "out of memory"); return -1; }
+    for (size_t i = 0; i < n; i++) {
+        const stbi_uc *p = pix + i * 4;
+        dst[i] = ((uint32_t)p[3] << 24) | ((uint32_t)p[0] << 16) |
+                 ((uint32_t)p[1] << 8) | (uint32_t)p[2];
+    }
+    stbi_image_free(pix);
+    out->w = w;
+    out->h = h;
+    out->px = dst;
+    return 0;
+}
+
 int img_load_file(const char *path, mg_image *out, char *err, size_t errlen) {
     out->w = out->h = 0;
     out->px = NULL;
@@ -92,20 +114,18 @@ int img_load_file(const char *path, mg_image *out, char *err, size_t errlen) {
         return -1;
     }
 
-    size_t n = (size_t)w * (size_t)h;
-    uint32_t *dst = malloc(n * sizeof(uint32_t));
-    if (!dst) { stbi_image_free(pix); set_err(err, errlen, "out of memory"); return -1; }
-    for (size_t i = 0; i < n; i++) {
-        const stbi_uc *p = pix + i * 4;
-        dst[i] = ((uint32_t)p[3] << 24) | ((uint32_t)p[0] << 16) |
-                 ((uint32_t)p[1] << 8) | (uint32_t)p[2];
-    }
-    stbi_image_free(pix);
+    return img_convert_rgba(pix, w, h, out, err, errlen);
+}
 
-    out->w = w;
-    out->h = h;
-    out->px = dst;
-    return 0;
+int img_load_mem(const unsigned char *buf, size_t len, mg_image *out, char *err, size_t errlen) {
+    out->w = out->h = 0;
+    out->px = NULL;
+    if (!buf || len == 0) { set_err(err, errlen, "no picture data"); return -1; }
+    if (len > IMG_MAX_FILE_BYTES) { set_err(err, errlen, "picture data is larger than 64 MB"); return -1; }
+    int w = 0, h = 0, comp = 0;
+    stbi_uc *pix = stbi_load_from_memory(buf, (int)len, &w, &h, &comp, 4);
+    if (!pix) { set_err(err, errlen, "cannot decode embedded picture"); return -1; }
+    return img_convert_rgba(pix, w, h, out, err, errlen);
 }
 
 /* Box-filter resample: each destination pixel averages the source area it covers.

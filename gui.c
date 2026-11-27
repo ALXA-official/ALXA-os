@@ -34,6 +34,7 @@
 #include "gui.h"
 #include "gui_apps.h"
 #include "imgcodec.h"
+#include "cursorfile.h"
 #include "extapp.h"
 #include "mgap_proto.h"
 #include "gfx.h"
@@ -193,20 +194,45 @@ static void rebuild_res_opts(void) {
     }
 }
 
-/* Cursor image: loaded once per path. Failing files fall back to the built-in arrow. */
+/* Pointer: PNG, .cur or animated .ani from Display/CursorFile. Loaded once per
+ * path. A file that fails to load falls back to the built-in arrow. */
 static char cur_applied_path[256];
+static struct cur_anim cur_data;
+static int cur_shown = -1;
+static long cur_t0;
+
+static long mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+static void cur_show(int icon) {
+    if (icon == cur_shown) return;
+    cur_shown = icon;
+    gfx_cursor_set(cur_data.icon[icon].px, cur_data.icon[icon].w, cur_data.icon[icon].h,
+                   cur_data.hx[icon], cur_data.hy[icon]);
+}
+
 static void sync_cursor(void) {
     if (!strcmp(cur_applied_path, cf.cursor_path)) return;
     snprintf(cur_applied_path, sizeof cur_applied_path, "%s", cf.cursor_path);
-    mg_image ci = { 0, 0, NULL };
+    cur_anim_free(&cur_data);
+    cur_shown = -1;
     char err[160];
-    if (cf.cursor_path[0] && img_load_file(cf.cursor_path, &ci, err, sizeof err) == 0 &&
-        gfx_cursor_set(ci.px, ci.w, ci.h, 0, 0) == 0) {
-        img_free(&ci);
+    if (cf.cursor_path[0] && cur_load(cf.cursor_path, &cur_data, err, sizeof err) == 0) {
+        cur_t0 = mono_ms();
+        cur_show(0);
         return;
     }
-    img_free(&ci);
     gfx_cursor_set(NULL, 0, 0, 0, 0);
+}
+
+/* Animated pointers: advance to the frame due now. Returns 1 while animating. */
+static int cursor_tick(void) {
+    if (cur_data.nsteps <= 1 || cur_shown < 0) return 0;
+    cur_show(cur_anim_icon_at(&cur_data, mono_ms() - cur_t0));
+    return 1;
 }
 
 static void load_cfg(void) {
@@ -240,7 +266,7 @@ static void load_cfg(void) {
     int gm = opt_index(GLASS_LIST, reg_eff("Display/Glass", t == 7 ? "Solid" : "VaporGlass"));
     cf.glass_mode = gm < 0 ? 0 : gm;
 
-    int op_pct = reg_eff_int("Display/GlassOpacity", cf.glass_mode == 2 ? 62 : 78);
+    int op_pct = reg_eff_int("Display/GlassOpacity", cf.glass_mode == 2 ? 58 : 66);
     if (op_pct < 38) op_pct = 38;
     if (op_pct > 100) op_pct = 100;
     cf.glass_alpha = cf.glass_mode == 3 ? 255 : (op_pct * 255) / 100;
@@ -249,7 +275,7 @@ static void load_cfg(void) {
     if (bl < 0) bl = 2;
     static const int blur_px[4] = { 0, 3, 6, 10 };
     cf.blur_r = (cf.glass_mode == 3) ? 0 : (cf.glass_mode == 2 ? blur_px[bl] / 2 : blur_px[bl]);
-    cf.sheen  = (cf.glass_mode == 0) ? 24 : (cf.glass_mode == 2 ? 14 : 0);
+    cf.sheen  = (cf.glass_mode == 0) ? 34 : (cf.glass_mode == 2 ? 18 : 0);
 
     cf.radius = reg_eff_int("Display/CornerRadius", t == 7 ? 4 : 10);
     if (cf.radius < 0) cf.radius = 0;
@@ -926,17 +952,17 @@ static const struct row r_display[] = {
     HEAD("Themes & VaporGlass"),
     CHO("Theme", "8 built-in Magnesium color & glass palettes", "Display/Theme", THEME_LIST, "Magnesium"),
     CHO("Accent color", "Highlights, active headers, and 12 Mg badge", "Display/Accent", ACCENT_LIST, "Sky"),
-    CHO("Glass effect", "Translucent frosted crystal optics (not Windows Aero)", "Display/Glass", GLASS_LIST, "VaporGlass"),
+    CHO("Glass effect", "Translucent frosted glass with blurred backdrop and sheen", "Display/Glass", GLASS_LIST, "VaporGlass"),
     CHO("Font smoothing", "Anti-aliased smooth, LCD subpixel, or crisp bitmap", "Display/FontSmoothing", FONT_LIST, "Smooth"),
     CHO("Wallpaper", "Aurora, gradient, nebula, prism, grid, solid, or picture", "Desktop/Background", BG_LIST, "Aurora"),
     { R_TEXT, "Wallpaper picture file", "Used by Picture wallpaper: BMP, PNG, JPG, GIF, TGA and more", "Desktop/Picture", 0, "", 0, 0 },
     CHO("Refresh rate", "Target frame rate; the nearest display mode is chosen", "Display/Refresh", "24|30|60|75|90|120|144|165|240", "60"),
-    { R_TEXT, "Cursor image file", "PNG or other picture up to 64x64 px; empty = built-in arrow", "Display/CursorFile", 0, "", 0, 0 },
+    { R_TEXT, "Cursor image file", "PNG, .cur or .ani up to 64x64 px; empty = built-in arrow", "Display/CursorFile", 0, "", 0, 0 },
 };
 
 static const struct row r_manual[] = {
     HEAD("Manual Glass & Geometry Tuning"),
-    CHO("Glass opacity (%)", "Panel translucency from 45% to 100%", "Display/GlassOpacity", "45|58|68|78|86|94|100", "78"),
+    CHO("Glass opacity (%)", "Panel translucency from 45% to 100%", "Display/GlassOpacity", "45|52|58|66|72|78|86|94|100", "66"),
     CHO("Backdrop blur", "2-pass frosted blur strength behind windows", "Display/GlassBlur", BLUR_LIST, "Medium"),
     CHO("Corner radius", "Window & control rounding in pixels", "Display/CornerRadius", "0|4|8|10|14", "10"),
     TOG("Desktop shortcut icons", "Show Programs, Notes, Network & Terminal on desktop", "Desktop/Icons", "1"),
@@ -1947,7 +1973,7 @@ static void draw_window(struct win *w, int active) {
 
     /* Translucent ionized titlebar (uniquely Magnesium: periodic element badge + pill controls) */
     uint32_t tbg = active ? cf.acc : p->titleoff;
-    int talpha = cf.glass_mode == 3 ? 255 : (active ? 190 : 140);
+    int talpha = cf.glass_mode == 3 ? 255 : (active ? 168 : 120);
     gfx_rrect_alpha(w->x + 1, w->y + 1, w->w - 2, TITLE_H, rad, tbg, talpha);
     uint32_t tfg = active ? cf.accfg : p->titlefgoff;
 
@@ -2108,7 +2134,7 @@ static void build_tiles(void) {
     add_tile("Pv", "Picture Viewer", TL_PICTURE,   NULL);
     add_tile("Vp", "Video Player",   TL_VIDEO,     NULL);
     add_tile("Wb", "Web Browser",    TL_BROWSER,   NULL);
-    add_tile("Cx", "Calc (standalone)", TL_EXTCALC, NULL);
+    add_tile("Cx", "Calc App", TL_EXTCALC, NULL);
     add_tile("Tm", "Terminal",       TL_TERMINAL,  NULL);
     add_tile("St", "Settings",       TL_SETTINGS,  NULL);
     add_tile("Rg", "Registry",       TL_REGISTRY,  NULL);
@@ -3342,6 +3368,7 @@ int gui_run(void) {
         }
         if (poll_desktop_ipc()) need_draw = 1;
         { int em = ext_pump(); if (em) { ext_service(em); need_draw = 1; } }
+        if (cursor_tick()) need_draw = 1;
 
         if (now - last_hotplug >= 2) {
             last_hotplug = now;
@@ -3381,7 +3408,7 @@ int gui_run(void) {
 
         int pty_ready = 0;
         struct gfx_mouse mev;
-        int k = gfx_poll_event((video_playing || ext_count() > 0) ? 16 : 250, term.pty_fd, &pty_ready, &mev);
+        int k = gfx_poll_event((video_playing || ext_count() > 0 || cur_data.nsteps > 1) ? 16 : 250, term.pty_fd, &pty_ready, &mev);
         if (pty_ready) {
             int r = term_pump();
             if (r < 0) {

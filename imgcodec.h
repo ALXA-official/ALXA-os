@@ -24,6 +24,9 @@ typedef struct {
 int  img_load_file(const char *path, mg_image *out, char *err, size_t errlen);
 void img_free(mg_image *im);
 
+/* Decode a picture held in memory (PNG, BMP, ... as above). */
+int  img_load_mem(const unsigned char *buf, size_t len, mg_image *out, char *err, size_t errlen);
+
 /* Resample to dw x dh (box filter, good for both shrinking and enlarging). */
 int  img_resample(const mg_image *src, int dw, int dh, mg_image *out);
 
