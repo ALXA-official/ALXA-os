@@ -24,7 +24,8 @@ enum {
     WK_MINES     = 10,
     WK_IMGVIEW   = 11,   /* Picture Viewer (media_apps.c) */
     WK_VIDEO     = 12,   /* Video Player (media_apps.c) */
-    WK_BROWSER   = 13    /* Web Browser (media_apps.c) */
+    WK_BROWSER   = 13,   /* Web Browser (media_apps.c) */
+    WK_EXT0      = 20    /* standalone apps: WK_EXT0 .. WK_EXT0+7 (extapp.c) */
 };
 
 /* Shared desktop theme snapshot passed from gui.c to gui_apps.c */

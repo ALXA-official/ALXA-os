@@ -22,6 +22,7 @@
 #include <sys/utsname.h>
 #include "gui_apps.h"
 #include "imgcodec.h"
+#include "extapp.h"
 #include "net.h"
 #include "cmds.h"
 
@@ -1206,6 +1207,12 @@ void apps_init_window(int kind, const char *arg, char *title_out, int *def_w, in
 void apps_draw_window(int kind, int x, int y, int cw, int ch, int active) {
     struct ui_theme t;
     ui_get_theme(&t);
+    if (kind >= WK_EXT0 && kind < WK_EXT0 + EXT_MAX) {
+        ui_set_clip(x, y, cw, ch);
+        gfx_rect(x, y, cw, ch, t.win);
+        ext_draw(kind - WK_EXT0, x, y, cw, ch);
+        return;
+    }
     switch (kind) {
     case WK_IMGVIEW:
     case WK_VIDEO:
@@ -1397,6 +1404,7 @@ void apps_on_wheel(int kind, int delta) {
 }
 
 void apps_on_key(int kind, int k) {
+    if (kind >= WK_EXT0 && kind < WK_EXT0 + EXT_MAX) { ext_key(kind - WK_EXT0, k); return; }
     if (kind == WK_IMGVIEW || kind == WK_VIDEO || kind == WK_BROWSER) { media_key(kind, k); return; }
     if (kind == WK_FILES) {
         if (fm.prompt_mode) {

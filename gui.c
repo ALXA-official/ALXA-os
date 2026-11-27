@@ -34,6 +34,8 @@
 #include "gui.h"
 #include "gui_apps.h"
 #include "imgcodec.h"
+#include "extapp.h"
+#include "mgap_proto.h"
 #include "gfx.h"
 #include "net.h"
 #include "registry.h"
@@ -1817,8 +1819,40 @@ static const char *const *menu_items(int kind, int m) {
     return mi_app0;
 }
 
+/* ================= Standalone apps (separate programs, see extapp.c) ================= */
+static void close_win(struct win *w);
+static void launch_ext(const char *path) {
+    if (ext_launch(path) < 0) toast("Could not start %s", path);
+}
+
+/* Open or close windows for apps whose state changed (mask from ext_pump). */
+static void ext_service(int mask) {
+    for (int s = 0; s < EXT_MAX; s++) {
+        if (!(mask & (1 << s))) continue;
+        int kind = WK_EXT0 + s;
+        if (!ext_alive(s)) {
+            struct win *w = win_by_kind(kind);
+            ext_close(s);
+            if (w) close_win(w);
+            continue;
+        }
+        int ew, eh;
+        char title[44];
+        if (!ext_info(s, &ew, &eh, title, sizeof title)) continue;
+        if (win_by_kind(kind)) continue;          /* size and title are set once, at hello */
+        struct win *w = open_win(kind);
+        if (!w) continue;
+        w->w = ew + 4;
+        w->h = eh + TITLE_H + MENU_H + 3;
+        snprintf(w->title, sizeof w->title, "%.38s", title);
+        clamp_win(w);
+        desk_hidden = 0;
+    }
+}
+
 static void close_win(struct win *w) {
     if (w->kind == WK_TERMINAL) term_stop();
+    if (w->kind >= WK_EXT0 && w->kind < WK_EXT0 + EXT_MAX) ext_close(w->kind - WK_EXT0);
     media_release(w->kind);
     int i;
     for (i = 0; i < nz; i++) if (zord[i] == w->id) break;
@@ -2038,7 +2072,7 @@ static void menu_action(struct win *w, int m, int i) {
 
 enum {
     TL_PROGRAMS, TL_FILES, TL_NOTES, TL_CALC, TL_CANVAS, TL_SYSMON, TL_NETCENTER, TL_MINES,
-    TL_PICTURE, TL_VIDEO, TL_BROWSER,
+    TL_PICTURE, TL_VIDEO, TL_BROWSER, TL_EXTCALC,
     TL_TERMINAL, TL_SETTINGS, TL_REGISTRY, TL_DESKTOP, TL_CONSOLE, TL_LOGOUT, TL_RESTART, TL_SHUTDOWN, TL_APP
 };
 struct tile { char sym[3], name[32]; int kind; char cmd[48]; };
@@ -2074,6 +2108,7 @@ static void build_tiles(void) {
     add_tile("Pv", "Picture Viewer", TL_PICTURE,   NULL);
     add_tile("Vp", "Video Player",   TL_VIDEO,     NULL);
     add_tile("Wb", "Web Browser",    TL_BROWSER,   NULL);
+    add_tile("Cx", "Calc (standalone)", TL_EXTCALC, NULL);
     add_tile("Tm", "Terminal",       TL_TERMINAL,  NULL);
     add_tile("St", "Settings",       TL_SETTINGS,  NULL);
     add_tile("Rg", "Registry",       TL_REGISTRY,  NULL);
@@ -2126,6 +2161,7 @@ static void launch_tile(int ti) {
     case TL_PICTURE:   open_win(WK_IMGVIEW); desk_hidden = 0; break;
     case TL_VIDEO:     open_win(WK_VIDEO); desk_hidden = 0; break;
     case TL_BROWSER:   open_win(WK_BROWSER); desk_hidden = 0; break;
+    case TL_EXTCALC:   launch_ext("/programs/extcalc"); desk_hidden = 0; break;
     case TL_TERMINAL:  open_win(WK_TERMINAL); desk_hidden = 0; break;
     case TL_SETTINGS:  open_win(WK_SETTINGS); desk_hidden = 0; break;
     case TL_REGISTRY:  open_win(WK_REGISTRY); desk_hidden = 0; break;
@@ -2996,6 +3032,17 @@ static int on_mouse(const struct gfx_mouse *mev) {
         return 1;
     }
 
+    /* Standalone app windows get the mouse inside their content area */
+    if (act && act->kind >= WK_EXT0 && act->kind < WK_EXT0 + EXT_MAX && mev->kind != GM_WHEEL) {
+        int cx = x - (act->x + 2), cy = y - (act->y + TITLE_H + MENU_H);
+        int cw = act->w - 4, ch = act->h - TITLE_H - MENU_H - 3;
+        if (cx >= 0 && cy >= 0 && cx < cw && cy < ch) {
+            int kind = mev->kind == GM_PRESS ? MGAP_PRESS : mev->kind == GM_RELEASE ? MGAP_RELEASE : MGAP_MOVE;
+            ext_mouse(act->kind - WK_EXT0, cx, cy, kind, mev->btn);
+            return 1;
+        }
+    }
+
     if (mev->kind == GM_MOVE) {
         if (drg.on && (mev->buttons_down & 1)) { do_drag(x, y); return 1; }
         const struct hot *h0 = hot_at(prev_hx, prev_hy);
@@ -3276,6 +3323,7 @@ int gui_run(void) {
             else if (!strcmp(t, "settings_dv")) { open_win(WK_SETTINGS); open_cat(4); }
             else if (!strcmp(t, "terminal")) open_win(WK_TERMINAL);
             else if (!strcmp(t, "registry")) open_win(WK_REGISTRY);
+            else if (!strncmp(t, "ext:", 4)) launch_ext(t + 4);
             else {
                 int wk = apps_kind_from_name(t, NULL, NULL);
                 if (wk > 0) open_win(wk);
@@ -3293,6 +3341,7 @@ int gui_run(void) {
             need_draw = 1;
         }
         if (poll_desktop_ipc()) need_draw = 1;
+        { int em = ext_pump(); if (em) { ext_service(em); need_draw = 1; } }
 
         if (now - last_hotplug >= 2) {
             last_hotplug = now;
@@ -3332,7 +3381,7 @@ int gui_run(void) {
 
         int pty_ready = 0;
         struct gfx_mouse mev;
-        int k = gfx_poll_event(video_playing ? 16 : 250, term.pty_fd, &pty_ready, &mev);
+        int k = gfx_poll_event((video_playing || ext_count() > 0) ? 16 : 250, term.pty_fd, &pty_ready, &mev);
         if (pty_ready) {
             int r = term_pump();
             if (r < 0) {
