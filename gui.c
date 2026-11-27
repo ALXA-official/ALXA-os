@@ -2580,13 +2580,13 @@ static void desk_scan(void) {
     struct dirent *de;
     while (ndesk_items < DESK_MAXF && (de = readdir(d)) != NULL) {
         if (de->d_name[0] == '.') continue;
-        char full[384];
-        snprintf(full, sizeof full, "%s/%s", dir, de->d_name);
+        char full[1024];
+        snprintf(full, sizeof full, "%.700s/%.255s", dir, de->d_name);
         struct stat st;
         if (stat(full, &st) != 0) continue;
         struct desk_item *it = &desk_items[ndesk_items];
         memset(it, 0, sizeof *it);
-        snprintf(it->name, sizeof it->name, "%s", de->d_name);
+        snprintf(it->name, sizeof it->name, "%.63s", de->d_name);
         it->is_dir = S_ISDIR(st.st_mode);
         it->is_exec = !it->is_dir && (st.st_mode & S_IXUSR) != 0;
         const char *dot = strrchr(de->d_name, '.');
