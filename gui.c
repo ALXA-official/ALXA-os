@@ -328,9 +328,10 @@ enum {
     A_DESK_ICON, A_DESK_FILE, A_CTX_ITEM, A_CTX_CLOSE
 };
 
-struct hot { int x, y, w, h, act, a, b, wid; };
+struct hot { int x, y, w, h, act, a, b, wid, ov; };
 static struct hot hots[MAXHOT];
 static int nhots, cur_wid;
+static int hot_overlay;      /* 1 while drawing the taskbar, Start, menus: they sit above windows */
 static int clip_hx0, clip_hy0, clip_hx1, clip_hy1;
 static int hover_x = -1, hover_y = -1;
 
@@ -355,16 +356,17 @@ static void hot_add(int x, int y, int w, int h, int act, int a, int b) {
     if (x1 > clip_hx1) x1 = clip_hx1;
     if (y1 > clip_hy1) y1 = clip_hy1;
     if (x1 <= x || y1 <= y || nhots >= MAXHOT) return;
-    hots[nhots++] = (struct hot){ x, y, x1 - x, y1 - y, act, a, b, cur_wid };
+    hots[nhots++] = (struct hot){ x, y, x1 - x, y1 - y, act, a, b, cur_wid, hot_overlay };
 }
-static const struct hot *hot_at(int x, int y) {
-    for (int i = nhots - 1; i >= 0; i--)
-        if (x >= hots[i].x && x < hots[i].x + hots[i].w &&
-            y >= hots[i].y && y < hots[i].y + hots[i].h) return &hots[i];
-    return NULL;
-}
+static const struct hot *hot_at(int x, int y);
 static int point_in(int px, int py, int x, int y, int w, int h) {
     return px >= x && px < x + w && py >= y && py < y + h;
+}
+/* Hover highlight test. While a window that another window covers is drawn,
+ * hover_blocked is 1 and nothing inside it lights up under the pointer. */
+static int hover_blocked;
+static int hover_in(int x, int y, int w, int h) {
+    return !hover_blocked && point_in(hover_x, hover_y, x, y, w, h);
 }
 
 /* ================= Windows & Desktop State ================= */
@@ -412,6 +414,30 @@ static struct win *active_win(void) {
     }
     return NULL;
 }
+/* Topmost visible window under (x, y), or NULL. */
+static struct win *win_at(int x, int y) {
+    for (int i = nz - 1; i >= 0; i--) {
+        struct win *w = win_by_id(zord[i]);
+        if (w && !w->minimized && point_in(x, y, w->x, w->y, w->w, w->h)) return w;
+    }
+    return NULL;
+}
+
+/* A hotspot counts only where it is actually visible: a window's controls are
+ * live only where that window is the topmost one under the pointer. Desktop
+ * icons (wid 0, not overlay) are live only where no window covers them. Overlays
+ * (taskbar, Start, menus, dialogs) are always live. */
+static const struct hot *hot_at(int x, int y) {
+    struct win *top = win_at(x, y);
+    for (int i = nhots - 1; i >= 0; i--) {
+        const struct hot *h = &hots[i];
+        if (x < h->x || x >= h->x + h->w || y < h->y || y >= h->y + h->h) continue;
+        if (h->ov) return h;
+        if (top ? h->wid == top->id : h->wid == 0) return h;
+    }
+    return NULL;
+}
+
 static void raise_win(struct win *w) {
     int i;
     for (i = 0; i < nz; i++) if (zord[i] == w->id) break;
@@ -740,7 +766,7 @@ void ui_get_theme(struct ui_theme *out) {
 }
 void ui_set_clip(int x, int y, int w, int h) { set_ui_clip(x, y, w, h); }
 void ui_hot_add(int x, int y, int w, int h, int act, int a, int b) { hot_add(x, y, w, h, act, a, b); }
-int  ui_hover_in(int x, int y, int w, int h) { return point_in(hover_x, hover_y, x, y, w, h); }
+int  ui_hover_in(int x, int y, int w, int h) { return hover_in(x, y, w, h); }
 void ui_toast(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -851,7 +877,7 @@ static void dlg_open(int type, int purpose, const char *title, const char *msg, 
 }
 
 static void draw_button(int x, int y, int w, int h, const char *label, uint32_t fg, uint32_t bg, int act, int a, int b) {
-    int hov = point_in(hover_x, hover_y, x, y, w, h);
+    int hov = hover_in(x, y, w, h);
     uint32_t fillc = bg;
     if (hov) {
         int r = ((bg >> 16) & 255) + 20; if (r > 255) r = 255;
@@ -1398,7 +1424,7 @@ static void settings_draw(int x, int y, int cw, int ch) {
             int tx = x + 20 + (i % cols) * (tw + gap);
             int ty = y + 60 + (i / cols) * (th + 8) - st.scroll * 24;
             if (ty + th < y + 58 || ty >= y + ch) continue;
-            int hi = i == st.hsel || point_in(hover_x, hover_y, tx, ty, tw, th);
+            int hi = i == st.hsel || hover_in(tx, ty, tw, th);
             uint32_t bg = hi ? p->sel : p->win_alt;
             gfx_rrect(tx, ty, tw, th, 8, bg);
             gfx_rrect_outline(tx, ty, tw, th, 8, hi ? cf.acc : p->border);
@@ -1424,7 +1450,7 @@ static void settings_draw(int x, int y, int cw, int ch) {
         int ry = y + 40 + i * 28;
         if (ry + 26 > y + ch) break;
         int sel = i == st.page;
-        int hov = point_in(hover_x, hover_y, x + 6, ry, nav_w - 12, 26);
+        int hov = hover_in(x + 6, ry, nav_w - 12, 26);
         if (sel || hov) gfx_rrect(x + 6, ry, nav_w - 12, 26, 6, sel ? cf.acc : p->sel);
         gfx_text(x + 12, ry + 5, cats[i].sym, sel ? cf.accfg : cf.acc, 1, 1, 24);
         gfx_text(x + 38, ry + 5, cats[i].name, sel ? cf.accfg : p->winfg, sel, 1, nav_w - 46);
@@ -1452,7 +1478,7 @@ static void settings_draw(int x, int y, int cw, int ch) {
             if (r.kind == R_HEAD) {
                 gfx_text(x0, cur_y + 10, r.label, cf.acc, 1, 1, pw);
             } else {
-                int sel = (i == st.sel && selectable(&r)) || (selectable(&r) && point_in(hover_x, hover_y, x0 - 6, cur_y, pw + 12, rh - 4));
+                int sel = (i == st.sel && selectable(&r)) || (selectable(&r) && hover_in(x0 - 6, cur_y, pw + 12, rh - 4));
                 gfx_rrect(x0 - 6, cur_y, pw + 12, rh - 4, 6, sel ? p->sel : p->win_alt);
                 gfx_text(x0 + 4, cur_y + 6, r.label, p->winfg, 1, 1, pw - 140);
                 if (r.sub) gfx_text(x0 + 4, cur_y + 24, r.sub, p->muted, 0, 1, pw - 160);
@@ -1990,17 +2016,17 @@ static void draw_window(struct win *w, int active) {
     int bx_min   = w->x + w->w - 93;
     int by = w->y + 6;
 
-    int hmin = point_in(hover_x, hover_y, bx_min, by, 25, 22);
+    int hmin = hover_in(bx_min, by, 25, 22);
     gfx_rrect_alpha(bx_min, by, 25, 22, 6, hmin ? p->sel : 0x0F172A, active ? 175 : 140);
     gfx_text(bx_min + 8, by + 3, "\xe2\x80\x94", active ? 0xFFFFFF : p->winfg, 1, 1, 16);
     hot_add(bx_min, by, 25, 22, A_WIN_MIN, w->id, 0);
 
-    int hmax = point_in(hover_x, hover_y, bx_max, by, 25, 22);
+    int hmax = hover_in(bx_max, by, 25, 22);
     gfx_rrect_alpha(bx_max, by, 25, 22, 6, hmax ? p->sel : 0x0F172A, active ? 175 : 140);
     gfx_box(bx_max + 8, by + 6, 9, 9, active ? 0xFFFFFF : p->winfg, 1);
     hot_add(bx_max, by, 25, 22, A_WIN_MAX, w->id, 0);
 
-    int hcls = point_in(hover_x, hover_y, bx_close, by, 25, 22);
+    int hcls = hover_in(bx_close, by, 25, 22);
     gfx_rrect(bx_close, by, 25, 22, 6, hcls ? 0xFF5555 : p->bad);
     gfx_text(bx_close + 9, by + 3, "\xc3\x97", 0xFFFFFF, 1, 1, 16);
     hot_add(bx_close, by, 25, 22, A_WIN_CLOSE, w->id, 0);
@@ -2014,7 +2040,7 @@ static void draw_window(struct win *w, int active) {
     for (int m = 0; names[m]; m++) {
         int mw = gfx_text_width(names[m], 1) + 16;
         int open = menu_win == w->id && menu_idx == m;
-        if (open || point_in(hover_x, hover_y, mx, my + 2, mw, MENU_H - 4))
+        if (open || hover_in(mx, my + 2, mw, MENU_H - 4))
             gfx_rrect(mx, my + 2, mw, MENU_H - 4, 4, open ? cf.acc : p->sel);
         gfx_text(mx + 8, my + 5, names[m], open ? cf.accfg : p->winfg, open, 1, mw);
         hot_add(mx, my, mw, MENU_H, A_MENU, w->id, m);
@@ -2068,7 +2094,7 @@ static void draw_dropdown(void) {
     gfx_glass_panel(x, y, mw, mh, 7, p->win, cf.glass_alpha, cf.blur_r, cf.acc, cf.sheen);
     for (int i = 0; i < n; i++) {
         int iy = y + 4 + i * 26;
-        int s = i == menu_sel || point_in(hover_x, hover_y, x + 4, iy, mw - 8, 24);
+        int s = i == menu_sel || hover_in(x + 4, iy, mw - 8, 24);
         if (s) gfx_rrect(x + 4, iy, mw - 8, 24, 4, cf.acc);
         gfx_text(x + 12, iy + 4, items[i], s ? cf.accfg : p->winfg, 0, 1, mw - 24);
         hot_add(x + 4, iy, mw - 8, 24, A_MENUITEM, w->id, menu_idx * 16 + i);
@@ -2251,7 +2277,7 @@ static void draw_start(void) {
         const struct tile *t = &tiles[vis[vi]];
         int tx = px + 12 + col * (tile_w + gap);
         int ty = py + 82 + row * (tile_h + gap);
-        int s = vi == ssel || point_in(hover_x, hover_y, tx, ty, tile_w, tile_h);
+        int s = vi == ssel || hover_in(tx, ty, tile_w, tile_h);
         gfx_rrect_alpha(tx, ty, tile_w, tile_h, 8, s ? p->sel : p->win_alt, s ? 235 : 185);
         gfx_rrect_outline(tx, ty, tile_w, tile_h, 8, s ? cf.acc : p->border);
         gfx_textf(tx + 8, ty + 5, p->muted, 0, 1, 32, "%d", vis[vi] + 1);
@@ -2376,7 +2402,7 @@ static void draw_taskbar(void) {
         const char *disp = cf.labels ? lab : sym;
         int bw = gfx_text_width(disp, 1) + 22;
         if (x + bw > right) break;
-        int hov = point_in(hover_x, hover_y, x, y + 6, bw, BAR_H - 12);
+        int hov = hover_in(x, y + 6, bw, BAR_H - 12);
         if (w || hov) {
             uint32_t bg = w ? (w == act ? p->sel : p->titleoff) : p->win_alt;
             gfx_rrect_alpha(x, y + 6, bw, BAR_H - 12, 6, bg, 210);
@@ -2664,7 +2690,7 @@ static void draw_desk_files(const struct pal *p, int W) {
     desk_layout_default(W);
     for (int i = 0; i < ndesk_items; i++) {
         const struct desk_item *it = &desk_items[i];
-        int hov = i == desk_drag || point_in(hover_x, hover_y, it->x, it->y, DESK_IW, DESK_IH);
+        int hov = i == desk_drag || hover_in(it->x, it->y, DESK_IW, DESK_IH);
         gfx_rrect_alpha(it->x, it->y, DESK_IW, DESK_IH, 8, hov ? p->sel : p->win, hov ? 205 : 135);
         gfx_rrect_outline(it->x, it->y, DESK_IW, DESK_IH, 8, hov ? cf.acc : p->border);
         int sw = gfx_text_width(it->sym, 2);
@@ -2725,7 +2751,7 @@ static void draw_desktop_icons(void) {
             iy = desk_y0 + 14;
             ix += iw + 12;
         }
-        int hov = point_in(hover_x, hover_y, ix, iy, iw, ih);
+        int hov = hover_in(ix, iy, iw, ih);
         gfx_rrect_alpha(ix, iy, iw, ih, 8, hov ? p->sel : p->win, hov ? 205 : 135);
         gfx_rrect_outline(ix, iy, iw, ih, 8, hov ? cf.acc : p->border);
         int sw = gfx_text_width(desk_shortcuts[i].sym, 2);
@@ -2764,7 +2790,7 @@ static void draw_context_menu(void) {
     gfx_glass_panel(x, y, mw, mh, 8, cf.p.win, cf.glass_alpha, cf.blur_r + 2, cf.acc, cf.sheen);
     for (int i = 0; ctx_labels[i]; i++) {
         int iy = y + 5 + i * 28;
-        int hov = point_in(hover_x, hover_y, x + 5, iy, mw - 10, 25);
+        int hov = hover_in(x + 5, iy, mw - 10, 25);
         if (hov) gfx_rrect(x + 5, iy, mw - 10, 25, 5, cf.acc);
         gfx_text(x + 14, iy + 4, ctx_labels[i], hov ? cf.accfg : cf.p.winfg, hov, 1, mw - 24);
         hot_add(x + 5, iy, mw - 10, 25, A_CTX_ITEM, i, 0);
@@ -2774,9 +2800,10 @@ static void draw_context_menu(void) {
 static void render_desktop(void) {
     const struct pal *p = &cf.p;
     int W = gfx_width(), H = gfx_height();
-    nhots = 0; cur_wid = 0;
+    nhots = 0; cur_wid = 0; hot_overlay = 0;
 
     draw_wallpaper();
+    hover_blocked = win_at(hover_x, hover_y) != NULL;   /* desktop icons under a window do not react */
     draw_desktop_icons();
 
     int anyvis = 0;
@@ -2785,8 +2812,10 @@ static void render_desktop(void) {
         struct win *w = win_by_id(zord[i]);
         if (!w || w->minimized) continue;
         anyvis = 1;
+        hover_blocked = win_at(hover_x, hover_y) != w;   /* only the topmost window reacts to the pointer */
         draw_window(w, w == act);
     }
+    hover_blocked = 0;
 
     if (!anyvis && !start_open) {
         const struct gfx_info *gi = gfx_get_info();
@@ -2800,6 +2829,8 @@ static void render_desktop(void) {
         gfx_text((W - gfx_text_width(h3, 1)) / 2, cy + 28, h3, p->muted, 0, 1, W - 32);
     }
 
+    hot_overlay = 1;
+    hover_blocked = 0;
     draw_taskbar();
     if (start_open) draw_start();
     if (menu_win) draw_dropdown();
@@ -2816,6 +2847,7 @@ static void render_desktop(void) {
         gfx_glass_panel(tx, ty, tw, 32, 8, p->win, 225, cf.blur_r, cf.acc, cf.sheen);
         gfx_text(tx + 16, ty + 8, toast_msg, p->winfg, 1, 1, tw - 32);
     }
+    hot_overlay = 0;
 }
 
 /* ================= Dialog & Input Actions ================= */
@@ -3058,13 +3090,19 @@ static int on_mouse(const struct gfx_mouse *mev) {
         return 1;
     }
 
-    /* Standalone app windows get the mouse inside their content area */
-    if (act && act->kind >= WK_EXT0 && act->kind < WK_EXT0 + EXT_MAX && mev->kind != GM_WHEEL) {
-        int cx = x - (act->x + 2), cy = y - (act->y + TITLE_H + MENU_H);
-        int cw = act->w - 4, ch = act->h - TITLE_H - MENU_H - 3;
+    /* Standalone app windows get the mouse inside their content area; the window
+     * under the pointer (not just the topmost one) decides. */
+    struct win *pw = win_at(x, y);
+    if (pw && mev->kind == GM_PRESS && !start_open && !ctx_open) {
+        const struct hot *oh = hot_at(x, y);
+        if (!oh || !oh->ov) raise_win(pw);      /* taskbar/menus over a window keep their clicks */
+    }
+    if (pw && pw->kind >= WK_EXT0 && pw->kind < WK_EXT0 + EXT_MAX && mev->kind != GM_WHEEL) {
+        int cx = x - (pw->x + 2), cy = y - (pw->y + TITLE_H + MENU_H);
+        int cw = pw->w - 4, ch = pw->h - TITLE_H - MENU_H - 3;
         if (cx >= 0 && cy >= 0 && cx < cw && cy < ch) {
             int kind = mev->kind == GM_PRESS ? MGAP_PRESS : mev->kind == GM_RELEASE ? MGAP_RELEASE : MGAP_MOVE;
-            ext_mouse(act->kind - WK_EXT0, cx, cy, kind, mev->btn);
+            ext_mouse(pw->kind - WK_EXT0, cx, cy, kind, mev->btn);
             return 1;
         }
     }
@@ -3094,7 +3132,7 @@ static int on_mouse(const struct gfx_mouse *mev) {
 
     if (mev->btn != 0) return 0;
 
-    const struct hot *h = hot_at(x, y);
+    const struct hot *h = hot_at(x, y);   /* hotspots of the topmost window under the pointer */
     if (!h) {
         if (ctx_open) { ctx_open = 0; return 1; }
         return 0;
@@ -3354,6 +3392,47 @@ int gui_run(void) {
                 int wk = apps_kind_from_name(t, NULL, NULL);
                 if (wk > 0) open_win(wk);
             }
+        }
+    }
+
+    /* Test hooks for overlapping windows (diagnostics only, printed to stderr).
+     * MG_TEST_OCCLUSION=1 counts clickable spots that belong to a window hidden
+     * under another window (should be 0). MG_TEST_CLICK=x,y sends one left click. */
+    if (getenv("MG_TEST_OCCLUSION")) {
+        render_desktop();
+        long n = 0, bad = 0;
+        for (int y = 0; y < gfx_height(); y += 2)
+            for (int x = 0; x < gfx_width(); x += 2) {
+                const struct hot *h = hot_at(x, y);
+                if (!h || h->ov) continue;
+                n++;
+                struct win *t = win_at(x, y);
+                if (h->wid ? (!t || t->id != h->wid) : (t != NULL)) bad++;
+            }
+        fprintf(stderr, "MG_TEST_OCCLUSION: clickable=%ld hidden=%ld\n", n, bad);
+        for (int i = 0; i < nz; i++) {
+            struct win *w = win_by_id(zord[i]);
+            if (w) fprintf(stderr, "  z%d %s x=%d y=%d w=%d h=%d\n", i, w->title, w->x, w->y, w->w, w->h);
+        }
+    }
+    const char *test_hover = getenv("MG_TEST_HOVER");   /* x,y: pointer position for a screenshot */
+    if (test_hover && sscanf(test_hover, "%d,%d", &hover_x, &hover_y) != 2) hover_x = hover_y = -1;
+    const char *test_click = getenv("MG_TEST_CLICK");
+    if (test_click && test_click[0]) {
+        int cx = 0, cy = 0;
+        if (sscanf(test_click, "%d,%d", &cx, &cy) == 2) {
+            render_desktop();
+            struct win *tw = win_at(cx, cy);
+            const struct hot *th = hot_at(cx, cy);
+            fprintf(stderr, "MG_TEST_CLICK %d,%d: window=%s hot_act=%d hot_wid=%d\n", cx, cy,
+                    tw ? tw->title : "-", th ? th->act : -1, th ? th->wid : -1);
+            struct gfx_mouse m = { cx, cy, 0, GM_PRESS, 0, 1 };
+            on_mouse(&m);
+            m.kind = GM_RELEASE;
+            m.buttons_down = 0;
+            on_mouse(&m);
+            struct win *aw = active_win();
+            fprintf(stderr, "  active window after click: %s\n", aw ? aw->title : "-");
         }
     }
 
